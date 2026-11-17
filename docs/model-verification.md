@@ -158,8 +158,11 @@ NEU-DET 原图是灰度图（虽然 JPEG 存为三通道），本次实测六张
 4. 由 `cx,cy,w,h` 计算 `xyxy`，减去 letterbox 的 `pad_left/pad_top`，再除以
    `ratio`，得到原图坐标，并裁剪到图像边界。
 5. 按类别分别做 IoU=0.45 的 NMS。
-6. 用模型 metadata 的 `names` 把类别 ID 映射为名称；未知 ID 必须报错，
-   不允许静默套用默认类别。
+6. 用模型 metadata 的 `names` 把类别 ID 映射为名称。核验脚本
+   `tools/neu_det_reference.py` 对未知 ID 采用 fail-fast（抛出异常），
+   以确保核验不会静默错映射；**产品侧 C++ 必须按 SRS FR-007 处理：
+   显示 `Unknown` 并记录异常**，或先完成需求变更再调整。两种方式都
+   不得把未知 ID 静默映射成已有类别。
 
 ### 六类标签映射（ID 顺序来自模型 metadata）
 
@@ -235,6 +238,27 @@ output: output0 [1, 10, 8400] tensor(float)
 `src/predict.py` 的预处理/后处理逻辑实现，类别名直接从 ONNX metadata 读取；
 并已用 `tools/compare_author_predict.py` 与作者原函数逐项对比（见第 8 节）。
 
+### 7.0 一键复现（推荐）
+
+`tools/reproduce_reference_verification.sh` 会从空的 `MODEL_DIR` 开始：
+
+1. 下载模型、六张测试图和作者 `src/predict.py`；
+2. 对每个文件校验本文记录的 SHA256；
+3. 为六张图逐张生成结果 JSON 和标注图；
+4. 运行作者实现对照，成功时输出 `REFERENCE_VERIFICATION_OK`。
+
+```bash
+VENV="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/venv" \
+MODEL_DIR="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0" \
+GH="$HOME/.local/bin/gh" \
+tools/reproduce_reference_verification.sh
+```
+
+`GH` 仅在 `gh` 不在 `PATH` 中时需要设置。2026-11-18 已在一个空的
+`/tmp/edge-ai-clean-repro` 下实际执行通过：模型、作者脚本和六张图片的
+SHA256 全部校验通过，六图推理完成，最后输出 `PARITY: IDENTICAL` 和
+`REFERENCE_VERIFICATION_OK`。下面的 7.2–7.4 是脚本对应的手工步骤。
+
 ### 7.1 Python 环境
 
 本次虚拟环境没有系统 pip，实际采用的命令如下：
@@ -254,46 +278,68 @@ python3 -m venv "$VENV"
 "$VENV/bin/pip" install -r tools/requirements-reference.txt
 ```
 
-### 7.2 下载模型与图片
+### 7.2 下载模型与全部六张测试图
 
 ```bash
 MODEL_DIR="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0"
-mkdir -p "$MODEL_DIR/test-images"
-curl -fL \
-  https://github.com/winthegame259/steel-surface-defect-detection/releases/download/v1.0.0/neu_det_yolov8n_best.onnx \
-  -o "$MODEL_DIR/neu_det_yolov8n_best.onnx"
-sha256sum "$MODEL_DIR/neu_det_yolov8n_best.onnx"
-# 必须为 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+MODEL_REPO="winthegame259/steel-surface-defect-detection"
+IMAGE_REPO="siddhartamukherjee/NEU-DET-Steel-Surface-Defect-Detection"
+IMAGE_COMMIT="351bee21b56bbf97a1e1d18262bceb202eb7ef41"
 
-# 本环境 raw.githubusercontent.com 不稳定，使用 GitHub API 取图；
-# 需要已登录的 gh，或换成其他可下载同一 commit 文件的方式。
-gh api \
-  "repos/siddhartamukherjee/NEU-DET-Steel-Surface-Defect-Detection/contents/IMAGES/crazing_101.jpg?ref=351bee21b56bbf97a1e1d18262bceb202eb7ef41" \
-  -H "Accept: application/vnd.github.raw" > "$MODEL_DIR/test-images/crazing_101.jpg"
-sha256sum "$MODEL_DIR/test-images/crazing_101.jpg"
-# 必须为 0c4ccbfd539aa9d0a151f25b3e798fbad36d2a3532218bcc5c313f06c2c1dda4
+# 参考实现、结果 JSON 和标注图目录必须先创建（含作者对照用的 reference-src）。
+mkdir -p "$MODEL_DIR/test-images" "$MODEL_DIR/reference-src" \
+         "$MODEL_DIR/verification-results/json" \
+         "$MODEL_DIR/verification-results/annotated"
+
+# 本环境 github.com 与 raw.githubusercontent.com 不稳定，统一走 api.github.com；
+# 需要已登录的 gh。也可改用 release/raw 的 curl 地址下载同一文件。
+ASSET_ID=$(gh api "repos/$MODEL_REPO/releases/tags/v1.0.0" \
+  --jq '.assets[] | select(.name=="neu_det_yolov8n_best.onnx") | .id')
+gh api "repos/$MODEL_REPO/releases/assets/$ASSET_ID" \
+  -H "Accept: application/octet-stream" > "$MODEL_DIR/neu_det_yolov8n_best.onnx"
+echo "495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1  $MODEL_DIR/neu_det_yolov8n_best.onnx" \
+  | sha256sum -c -
+
+# 六张图逐张下载并校验；每张图都必须有对应 JSON，才能做六图 author 对照。
+while read -r name sha; do
+  gh api "repos/$IMAGE_REPO/contents/IMAGES/$name.jpg?ref=$IMAGE_COMMIT" \
+    -H "Accept: application/vnd.github.raw" > "$MODEL_DIR/test-images/$name.jpg"
+  echo "$sha  $MODEL_DIR/test-images/$name.jpg" | sha256sum -c -
+done <<'EOF'
+crazing_101 0c4ccbfd539aa9d0a151f25b3e798fbad36d2a3532218bcc5c313f06c2c1dda4
+scratches_1 500c46e2f5d7065d8c492b0cfb36c3ba77a85a744079bf6453dfc85e02b97a3c
+patches_1 0ea4843aa7801ce5a5e672ec8c0266d4910aa7d740955f38d087b38154d0fe67
+inclusion_1 2b0a6eff755d5c5867d3e3ca6b26af9548813e50c9b12b0f3381a49560a42634
+pitted_surface_1 38a0ece141350f5bed53c99da4d96ce25d42b3ed4248e536a579ab823abfb318
+rolled-in_scale_1 e9d0358a2859da86a7a9cc75deb5c235fcb8b14e8773cd92e94593b0289736fd
+EOF
 ```
 
-### 7.3 单图参考推理
+### 7.3 六图参考推理（逐图生成 JSON）
 
 ```bash
 cd /path/to/industrial-defect-monitor
-"$VENV/bin/python" -I tools/neu_det_reference.py \
-  --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" \
-  --image "$MODEL_DIR/test-images/crazing_101.jpg" \
-  --conf 0.25 --iou 0.45 --imgsz 640 \
-  --expected-sha256 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1 \
-  --json-out "$MODEL_DIR/verification-results/json/crazing_101.json" \
-  --image-out "$MODEL_DIR/verification-results/annotated/crazing_101.jpg"
+for name in crazing_101 scratches_1 patches_1 inclusion_1 pitted_surface_1 rolled-in_scale_1; do
+  "$VENV/bin/python" -I tools/neu_det_reference.py \
+    --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" \
+    --image "$MODEL_DIR/test-images/$name.jpg" \
+    --conf 0.25 --iou 0.45 --imgsz 640 \
+    --expected-sha256 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1 \
+    --json-out "$MODEL_DIR/verification-results/json/$name.json" \
+    --image-out "$MODEL_DIR/verification-results/annotated/$name.jpg"
+done
 ```
 
 ### 7.4 与作者原实现对比
 
 ```bash
-# 先取得作者 src/predict.py（同样使用 GitHub API，避免 raw.githubusercontent 不稳定）
+# 作者脚本目录已在 7.2 创建；这里再次显式创建，保证本步骤可单独执行。
+mkdir -p "$MODEL_DIR/reference-src"
 gh api \
   "repos/winthegame259/steel-surface-defect-detection/contents/src/predict.py?ref=1226b2d8a241b3ecacb61d9e727051ccb8baa64e" \
   -H "Accept: application/vnd.github.raw" > "$MODEL_DIR/reference-src/src_predict.py"
+echo "84dfc96d0a8bfe9a1b4474b32a2e53c7e94b4ebba2f615269bc5f938b930c130  $MODEL_DIR/reference-src/src_predict.py" \
+  | sha256sum -c -
 
 "$VENV/bin/python" -I tools/compare_author_predict.py \
   --author-predict "$MODEL_DIR/reference-src/src_predict.py" \
@@ -383,6 +429,9 @@ mean=80.76 ms  p50=75.52 ms  p95=112.46 ms  min=63.83 ms  max=140.85 ms
    类型的泛化能力未知。
 9. **测试图片再分发权**：镜像仓库无 license，图片未提交；若后续需要把
    测试图纳入 CI，必须先取得明确授权或改用可再分发的替代图片。
+10. **SRS FR-007 对齐**：核验脚本对未知类别 ID 采用 fail-fast；SRS 要求
+    显示 `Unknown` 并记录异常。2B 的 C++ 实现应按 SRS 执行，或先记录需求
+    变更后调整，不能静默映射。
 
 ## 10. 参考链接
 

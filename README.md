@@ -121,6 +121,7 @@ CTest 中的 `cli_behavior` 测试会真实执行 `edge_ai`，检查：
 ├── tools/
 │   ├── neu_det_reference.py           # ONNX Runtime CPU 参考推理脚本
 │   ├── compare_author_predict.py      # 与模型作者参考实现的逐项对照
+│   ├── reproduce_reference_verification.sh  # 干净目录一键下载/校验/重跑六图
 │   └── requirements-reference.txt     # 参考推理环境固定版本
 └── tests/
     └── cli_tests.cmake     # CTest 调用的 CLI 行为测试脚本
@@ -137,7 +138,13 @@ release v1.0.0）。模型来源、SHA256、AGPL-3.0/数据集许可说明、输
 [docs/model-verification.md](docs/model-verification.md)。
 
 模型权重与测试图片不提交到仓库；按文档中的固定 URL 下载并核对 SHA256 后，
-用 `tools/neu_det_reference.py` 复现参考推理结果。
+用 `tools/neu_det_reference.py` 复现参考推理结果。干净环境可一键执行：
+
+```bash
+VENV="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/venv" \
+MODEL_DIR="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0" \
+tools/reproduce_reference_verification.sh
+```
 
 ## 验收记录
 
