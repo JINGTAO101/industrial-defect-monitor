@@ -101,6 +101,32 @@ std::filesystem::path normalizedPath(const std::string& path)
         absolute = std::filesystem::path(path);
         error_code.clear();
     }
+
+    // Resolve the final symlink chain explicitly. weakly_canonical() leaves a
+    // dangling final symlink as the link path, so "alias -> missing.json"
+    // would otherwise compare differently from "missing.json" even though
+    // writing through the alias creates/overwrites that target.
+    for (int depth = 0; depth < 40; ++depth) {
+        error_code.clear();
+        const std::filesystem::file_status status =
+            std::filesystem::symlink_status(absolute, error_code);
+        if (error_code ||
+            status.type() != std::filesystem::file_type::symlink) {
+            break;
+        }
+        error_code.clear();
+        std::filesystem::path target =
+            std::filesystem::read_symlink(absolute, error_code);
+        if (error_code || target.empty()) {
+            break;
+        }
+        if (target.is_relative()) {
+            target = absolute.parent_path() / target;
+        }
+        absolute = target.lexically_normal();
+    }
+
+    error_code.clear();
     const std::filesystem::path canonical =
         std::filesystem::weakly_canonical(absolute, error_code);
     if (!error_code) {

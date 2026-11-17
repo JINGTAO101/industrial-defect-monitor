@@ -134,6 +134,38 @@ expect_conflict(
     --json-out "${TEST_DIR}/sub/../zero_output.onnx"
 )
 
+# Dangling symlink whose target is the other output path. Writing the Tensor
+# through the alias would create result.json, then the JSON write would
+# overwrite it; the program must reject the pair before creating the target.
+set(DANGLING_TARGET "${TEST_DIR}/dangling-result.json")
+set(DANGLING_LINK "${TEST_DIR}/dangling-alias.json")
+file(CREATE_LINK "${DANGLING_TARGET}" "${DANGLING_LINK}" SYMBOLIC)
+expect_conflict(
+    "dangling symlink vs other output"
+    "refer to the same file"
+    --model "${MODEL}" --image "${IMAGE}"
+    --dump-input "${DANGLING_LINK}" --json-out "${DANGLING_TARGET}"
+)
+if(EXISTS "${DANGLING_TARGET}")
+    message(FATAL_ERROR "dangling symlink target was created: ${DANGLING_TARGET}")
+endif()
+# EXISTS() follows symlinks, so a dangling link reports false; READ_SYMLINK
+# verifies that the link itself is still present.
+file(READ_SYMLINK "${DANGLING_LINK}" DANGLING_LINK_VALUE)
+
+# The same dangling target through a symlink chain.
+set(CHAINED_LINK "${TEST_DIR}/chained-alias.json")
+file(CREATE_LINK "${DANGLING_LINK}" "${CHAINED_LINK}" SYMBOLIC)
+expect_conflict(
+    "chained dangling symlink vs other output"
+    "refer to the same file"
+    --model "${MODEL}" --image "${IMAGE}"
+    --json-out "${DANGLING_TARGET}" --dump-input "${CHAINED_LINK}"
+)
+if(EXISTS "${DANGLING_TARGET}")
+    message(FATAL_ERROR "chained dangling symlink target was created: ${DANGLING_TARGET}")
+endif()
+
 file(SHA256 "${MODEL}" MODEL_SHA_AFTER)
 file(SHA256 "${IMAGE}" IMAGE_SHA_AFTER)
 if(NOT MODEL_SHA_BEFORE STREQUAL MODEL_SHA_AFTER)

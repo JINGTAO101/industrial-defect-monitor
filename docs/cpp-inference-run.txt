@@ -16,7 +16,7 @@ $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$O
 -- ONNX Runtime headers: $ORT_DIR/include
 -- ONNX Runtime library: $ORT_DIR/lib/libonnxruntime.so
 -- OpenCV: 4.6.0
--- Configuring done (0.3s)
+-- Configuring done (0.4s)
 -- Generating done (0.0s)
 -- Build files have been written to: $REPO_ROOT/build
 
@@ -24,8 +24,8 @@ $ cmake --build build
 [1/13] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
 [2/13] Linking CXX static library libsystem_info.a
 [3/13] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
-[4/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
-[5/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
+[4/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
+[5/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
 [6/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
 [7/13] Linking CXX static library libedge_ai_core.a
 [8/13] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
@@ -39,7 +39,7 @@ $ ctest --test-dir build --output-on-failure
 Internal ctest changing into directory: $REPO_ROOT/build
 Test project $REPO_ROOT/build
       Start  1: unit_preprocess_non_square
- 1/17 Test  #1: unit_preprocess_non_square ................   Passed    0.07 sec
+ 1/17 Test  #1: unit_preprocess_non_square ................   Passed    0.05 sec
       Start  2: unit_postprocess_empty
  2/17 Test  #2: unit_postprocess_empty ....................   Passed    0.01 sec
       Start  3: unit_postprocess_nms_same_class
@@ -61,21 +61,21 @@ Test project $REPO_ROOT/build
       Start 11: unit_class_metadata_parser
 11/17 Test #11: unit_class_metadata_parser ................   Passed    0.01 sec
       Start 12: cli_behavior
-12/17 Test #12: cli_behavior ..............................   Passed    1.27 sec
+12/17 Test #12: cli_behavior ..............................   Passed    1.21 sec
       Start 13: cli_inference_failures
-13/17 Test #13: cli_inference_failures ....................   Passed    0.61 sec
+13/17 Test #13: cli_inference_failures ....................   Passed    0.76 sec
       Start 14: cli_empty_detections
 14/17 Test #14: cli_empty_detections ......................   Passed    0.16 sec
       Start 15: cli_path_conflicts
-15/17 Test #15: cli_path_conflicts ........................   Passed    0.70 sec
+15/17 Test #15: cli_path_conflicts ........................   Passed    0.81 sec
       Start 16: cpp_reference_comparison
-16/17 Test #16: cpp_reference_comparison ..................   Passed    2.33 sec
+16/17 Test #16: cpp_reference_comparison ..................   Passed    6.31 sec
       Start 17: cpp_reference_rejects_incomplete_inputs
-17/17 Test #17: cpp_reference_rejects_incomplete_inputs ...   Passed    0.35 sec
+17/17 Test #17: cpp_reference_rejects_incomplete_inputs ...   Passed    0.64 sec
 
 100% tests passed, 0 tests failed out of 17
 
-Total Test time (real) =   5.62 sec
+Total Test time (real) =  10.08 sec
 
 $ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image "$MODEL_DIR/test-images/crazing_101.jpg" --conf 0.25 --iou 0.45 --json-out build/verification/primary.json --dump-input build/verification/primary.bin
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider
@@ -122,12 +122,16 @@ Try 'edge_ai --help' for more information.
 $ ./build/bin/edge_ai --model=--bogus --image=tests/fixtures/non_square_320x200.png
 edge_ai: model file not found: --bogus
 # exit code: 1 (leading-dash value passed via --option=value)
-# Output path conflict (model is copied to a test directory first)
+# Output path conflicts (including a dangling symlink target)
 $ sha256sum $TEST_DIR/zero_output.onnx (before)
 22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697  $REPO_ROOT/build/path-conflict-tests/zero_output.onnx
 $ ./build/bin/edge_ai --model $TEST_DIR/zero_output.onnx --image $TEST_DIR/non_square_320x200.png --json-out $TEST_DIR/zero_output.onnx
 edge_ai: output path '$REPO_ROOT/build/path-conflict-tests/zero_output.onnx' conflicts with model path '$REPO_ROOT/build/path-conflict-tests/zero_output.onnx'
 # exit code: 2
+$ ./build/bin/edge_ai --model $TEST_DIR/zero_output.onnx --image $TEST_DIR/non_square_320x200.png --dump-input $TEST_DIR/dangling-alias.json --json-out $TEST_DIR/dangling-result.json
+edge_ai: output paths '$REPO_ROOT/build/path-conflict-tests/dangling-alias.json' and '$REPO_ROOT/build/path-conflict-tests/dangling-result.json' refer to the same file
+# exit code: 2 (dangling symlink target)
+# dangling target exists: no
 $ sha256sum $TEST_DIR/zero_output.onnx (after)
 22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697  $REPO_ROOT/build/path-conflict-tests/zero_output.onnx
 $ "$MODEL_DIR/venv/bin/python" -I tools/compare_cpp_reference.py --edge-ai build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image-dir "$MODEL_DIR/test-images" --reference-results docs/reference-inference-results.json --out-dir build/reference-comparison

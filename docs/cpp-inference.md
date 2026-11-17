@@ -98,8 +98,8 @@ cmake --build build
 - 以 `-` 开头的值必须写成 `--option=value`，例如
   `--model=-model.onnx`；空格分隔形式只接受不以 `-` 开头的值。
 - `--json-out` 和 `--dump-input` 在写入前与模型、输入图片及彼此做路径冲突
-  检查；相对路径、`..`、符号链接和硬链接都按同一文件处理。冲突时返回 2，
-  且不会创建或截断任何文件。
+  检查；相对路径、`..`、符号链接、悬空符号链接的目标及其链、硬链接都按
+  同一文件处理。冲突时返回 2，且不会创建或截断任何文件。
 
 实测输出（`crazing_101.jpg`）：
 
@@ -150,8 +150,10 @@ edge_ai: output path '.../zero_output.onnx' conflicts with model path '.../zero_
 edge_ai: output paths '.../same-output.bin' and '.../same-output.bin' refer to the same file
 ```
 
-`cli_path_conflicts` 覆盖相对路径、`..`、符号链接和硬链接别名，并在测试后
-比较模型/图片的 SHA256，确认原文件未被修改。
+`cli_path_conflicts` 覆盖相对路径、`..`、符号链接、硬链接，以及
+`alias -> 尚不存在的 result.json`（包括符号链接链）这种悬空链接场景；测试
+确认程序拒绝组合、目标文件没有被创建，并在测试后比较模型/图片的 SHA256，
+确认原文件未被修改。
 
 前两条和契约错误使用仓库内合成夹具
 `tests/fixtures/{corrupt_model.bin,wrong_input.onnx,wrong_output.onnx}`；图片
@@ -292,7 +294,7 @@ ctest --test-dir build --output-on-failure
 | `cli_behavior` | 帮助、非法参数、无参数横幅 |
 | `cli_inference_failures` | 缺失/损坏模型、错误输入/输出契约、损坏图片 |
 | `cli_empty_detections` | 合法契约、全零输出模型端到端返回 0 个检测 |
-| `cli_path_conflicts` | 输出路径指向模型/图片/彼此（含相对路径/符号链接/硬链接）被拒绝，原文件 SHA256 不变 |
+| `cli_path_conflicts` | 输出路径指向模型/图片/彼此（含相对路径/悬空符号链接/硬链接）被拒绝，原文件 SHA256 不变且悬空目标未被创建 |
 | `cpp_reference_comparison` | 六图 C++ 与 2A 参考对照（可选配置） |
 | `cpp_reference_rejects_incomplete_inputs` | 只有一张图时必须失败；阈值不一致时必须失败（可选配置） |
 
