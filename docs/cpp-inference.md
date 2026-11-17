@@ -91,6 +91,16 @@ cmake --build build
 供预处理对照。无 `--model/--image` 时仍打印启动横幅。参数错误返回 2，
 模型/图片/推理错误返回 1。
 
+参数解析规则：
+
+- 缺值不会吞掉后续选项；例如 `--help --model --bogus` 返回 2，而不是把
+  `--bogus` 当作模型路径后显示帮助。
+- 以 `-` 开头的值必须写成 `--option=value`，例如
+  `--model=-model.onnx`；空格分隔形式只接受不以 `-` 开头的值。
+- `--json-out` 和 `--dump-input` 在写入前与模型、输入图片及彼此做路径冲突
+  检查；相对路径、`..`、符号链接和硬链接都按同一文件处理。冲突时返回 2，
+  且不会创建或截断任何文件。
+
 实测输出（`crazing_101.jpg`）：
 
 ```text
@@ -132,6 +142,16 @@ edge_ai: model contract mismatch: input shape mismatch: expected [1, 3, 640, 640
 edge_ai: model contract mismatch: output shape mismatch: expected [1, 10, 8400], got [1, 10, 100]
 edge_ai: failed to read image: tests/fixtures/corrupt_model.bin
 ```
+
+输出路径冲突（退出码 2，冲突文件不会被创建或截断）：
+
+```text
+edge_ai: output path '.../zero_output.onnx' conflicts with model path '.../zero_output.onnx'
+edge_ai: output paths '.../same-output.bin' and '.../same-output.bin' refer to the same file
+```
+
+`cli_path_conflicts` 覆盖相对路径、`..`、符号链接和硬链接别名，并在测试后
+比较模型/图片的 SHA256，确认原文件未被修改。
 
 前两条和契约错误使用仓库内合成夹具
 `tests/fixtures/{corrupt_model.bin,wrong_input.onnx,wrong_output.onnx}`；图片
@@ -200,6 +220,15 @@ B=G=R），所以本数据集上 BGR/RGB 无法区分。对真正的彩色输入
 
 同一模型、六张图、`conf=0.25`、`IoU=0.45`，比较检测数量、类别、置信度和
 原图 `bbox_xyxy`；同时比较 `--dump-input` 与 Python 预处理 Tensor。
+`tools/compare_cpp_reference.py` 还会在开始前执行完整性守卫：
+
+- 图片目录必须与参考结果中的六张图**完全一致**；缺图或多出 JPG 都会失败；
+- 每张图片的实际 SHA256 必须与参考记录一致；
+- `--conf`/`--iou` 必须与参考结果阈值一致；
+- C++ JSON 中的模型 SHA256、CPU provider 和阈值也会再次核对。
+
+因此“只放一张图”或“阈值不同”的情况不会被当作六图对照通过；
+`cpp_reference_rejects_incomplete_inputs` 专门覆盖这两种拒绝路径。
 
 | 图片 | 检测数 C++/参考 | 类别一致 | 最大置信度差 | 最大 bbox 差 | 最大预处理差 |
 | --- | ---: | --- | ---: | ---: | ---: |
@@ -242,7 +271,7 @@ SUMMARY: images=6 failures=0 max_conf_diff=1.192e-06 max_bbox_diff=3.436e-05 max
 ctest --test-dir build --output-on-failure
 ```
 
-本次配置（提供真实模型和图片路径）共 14 个测试全部通过：
+本次配置（提供真实模型和图片路径）共 16 个测试全部通过：
 
 | 测试 | 内容 |
 | --- | --- |
@@ -259,10 +288,12 @@ ctest --test-dir build --output-on-failure
 | `cli_behavior` | 帮助、非法参数、无参数横幅 |
 | `cli_inference_failures` | 缺失/损坏模型、错误输入/输出契约、损坏图片 |
 | `cli_empty_detections` | 合法契约、全零输出模型端到端返回 0 个检测 |
+| `cli_path_conflicts` | 输出路径指向模型/图片/彼此（含相对路径/符号链接/硬链接）被拒绝，原文件 SHA256 不变 |
 | `cpp_reference_comparison` | 六图 C++ 与 2A 参考对照（可选配置） |
+| `cpp_reference_rejects_incomplete_inputs` | 只有一张图时必须失败；阈值不一致时必须失败（可选配置） |
 
-不提供 `EDGE_AI_MODEL_PATH` 等变量时，`cpp_reference_comparison` 不会注册；
-其余 13 个测试仍可运行。失败路径的原始输出见第 4 节。
+不提供 `EDGE_AI_MODEL_PATH` 等变量时，两个 `cpp_reference_*` 测试不会注册；
+其余 14 个测试仍可运行。失败路径的原始输出见第 4 节。
 
 测试夹具：
 
@@ -289,7 +320,7 @@ ctest --test-dir build --output-on-failure
 7. **性能**：未设置性能目标，也未做系统基准；仅记录功能验证。
 8. **未包含**：摄像头、多线程、SQLite、MQTT。
 9. **可选集成测试**：需要外部模型、六张测试图和 Python venv；这些资产不提交，
-   干净克隆只能默认运行 13 个不依赖真实模型的测试。
+   干净克隆只能默认运行 14 个不依赖真实模型的测试。
 
 ## 10. 相关文件
 
@@ -300,7 +331,8 @@ ctest --test-dir build --output-on-failure
 - SHA256：`include/sha256.hpp`、`src/sha256.cpp`
 - 单图 CLI：`src/main.cpp`
 - 测试：`tests/unit_tests.cpp`、`tests/cli_inference_tests.cmake`、
-  `tools/compare_cpp_reference.py`
+  `tests/cli_empty_detections.cmake`、`tests/cli_path_conflict_tests.cmake`、
+  `tests/compare_reference_guard_tests.cmake`、`tools/compare_cpp_reference.py`
 - 2A 参考记录：`docs/model-verification.md`
 - 本次干净构建、CTest、单图推理、失败路径和六图对照的原始运行日志：
   `docs/cpp-inference-run.txt`（路径已脱敏为 `$MODEL_DIR` / `$ORT_DIR`）

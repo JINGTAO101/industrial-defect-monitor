@@ -16,7 +16,7 @@ $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$O
 -- ONNX Runtime headers: $ORT_DIR/include
 -- ONNX Runtime library: $ORT_DIR/lib/libonnxruntime.so
 -- OpenCV: 4.6.0
--- Configuring done (0.4s)
+-- Configuring done (0.3s)
 -- Generating done (0.0s)
 -- Build files have been written to: $REPO_ROOT/build
 
@@ -28,8 +28,8 @@ $ cmake --build build
 [5/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
 [6/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
 [7/13] Linking CXX static library libedge_ai_core.a
-[8/13] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
-[9/13] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
+[8/13] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
+[9/13] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
 [10/13] Linking CXX executable bin/edge_ai_tests
 [11/13] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
 [12/13] Linking CXX static library libedge_ai_inference.a
@@ -39,37 +39,41 @@ $ ctest --test-dir build --output-on-failure
 Internal ctest changing into directory: $REPO_ROOT/build
 Test project $REPO_ROOT/build
       Start  1: unit_preprocess_non_square
- 1/14 Test  #1: unit_preprocess_non_square ............   Passed    0.04 sec
+ 1/16 Test  #1: unit_preprocess_non_square ................   Passed    0.04 sec
       Start  2: unit_postprocess_empty
- 2/14 Test  #2: unit_postprocess_empty ................   Passed    0.01 sec
+ 2/16 Test  #2: unit_postprocess_empty ....................   Passed    0.01 sec
       Start  3: unit_postprocess_nms_same_class
- 3/14 Test  #3: unit_postprocess_nms_same_class .......   Passed    0.01 sec
+ 3/16 Test  #3: unit_postprocess_nms_same_class ...........   Passed    0.01 sec
       Start  4: unit_postprocess_nms_cross_class
- 4/14 Test  #4: unit_postprocess_nms_cross_class ......   Passed    0.01 sec
+ 4/16 Test  #4: unit_postprocess_nms_cross_class ..........   Passed    0.01 sec
       Start  5: unit_postprocess_coordinate_restore
- 5/14 Test  #5: unit_postprocess_coordinate_restore ...   Passed    0.01 sec
+ 5/16 Test  #5: unit_postprocess_coordinate_restore .......   Passed    0.01 sec
       Start  6: unit_postprocess_nonfinite
- 6/14 Test  #6: unit_postprocess_nonfinite ............   Passed    0.01 sec
+ 6/16 Test  #6: unit_postprocess_nonfinite ................   Passed    0.01 sec
       Start  7: unit_postprocess_shape_mismatch
- 7/14 Test  #7: unit_postprocess_shape_mismatch .......   Passed    0.01 sec
+ 7/16 Test  #7: unit_postprocess_shape_mismatch ...........   Passed    0.01 sec
       Start  8: unit_class_mapping_unknown
- 8/14 Test  #8: unit_class_mapping_unknown ............   Passed    0.01 sec
+ 8/16 Test  #8: unit_class_mapping_unknown ................   Passed    0.01 sec
       Start  9: unit_contract_validation
- 9/14 Test  #9: unit_contract_validation ..............   Passed    0.01 sec
+ 9/16 Test  #9: unit_contract_validation ..................   Passed    0.01 sec
       Start 10: unit_class_metadata_parser
-10/14 Test #10: unit_class_metadata_parser ............   Passed    0.01 sec
+10/16 Test #10: unit_class_metadata_parser ................   Passed    0.01 sec
       Start 11: cli_behavior
-11/14 Test #11: cli_behavior ..........................   Passed    0.51 sec
+11/16 Test #11: cli_behavior ..............................   Passed    1.17 sec
       Start 12: cli_inference_failures
-12/14 Test #12: cli_inference_failures ................   Passed    0.58 sec
+12/16 Test #12: cli_inference_failures ....................   Passed    0.58 sec
       Start 13: cli_empty_detections
-13/14 Test #13: cli_empty_detections ..................   Passed    0.21 sec
-      Start 14: cpp_reference_comparison
-14/14 Test #14: cpp_reference_comparison ..............   Passed    1.95 sec
+13/16 Test #13: cli_empty_detections ......................   Passed    0.14 sec
+      Start 14: cli_path_conflicts
+14/16 Test #14: cli_path_conflicts ........................   Passed    0.66 sec
+      Start 15: cpp_reference_comparison
+15/16 Test #15: cpp_reference_comparison ..................   Passed    2.31 sec
+      Start 16: cpp_reference_rejects_incomplete_inputs
+16/16 Test #16: cpp_reference_rejects_incomplete_inputs ...   Passed    0.41 sec
 
-100% tests passed, 0 tests failed out of 14
+100% tests passed, 0 tests failed out of 16
 
-Total Test time (real) =   3.41 sec
+Total Test time (real) =   5.41 sec
 
 $ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image "$MODEL_DIR/test-images/crazing_101.jpg" --conf 0.25 --iou 0.45 --json-out build/verification/primary.json --dump-input build/verification/primary.bin
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider
@@ -107,8 +111,27 @@ $ ./build/bin/edge_ai --model $MODEL_DIR/neu_det_yolov8n_best.onnx --image tests
 edge_ai: failed to read image: tests/fixtures/corrupt_model.bin
 # exit code: 1
 
+# Argument parsing
+$ ./build/bin/edge_ai --help --model --bogus
+edge_ai: missing value for --model (use --model=<value> when the value starts with '-')
+Try 'edge_ai --help' for more information.
+# exit code: 2 (stdout is empty; help is not shown)
+
+$ ./build/bin/edge_ai --model=--bogus --image=tests/fixtures/non_square_320x200.png
+edge_ai: model file not found: --bogus
+# exit code: 1 (leading-dash value passed via --option=value)
+# Output path conflict (model is copied to a test directory first)
+$ sha256sum $TEST_DIR/zero_output.onnx (before)
+22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697  $REPO_ROOT/build/path-conflict-tests/zero_output.onnx
+$ ./build/bin/edge_ai --model $TEST_DIR/zero_output.onnx --image $TEST_DIR/non_square_320x200.png --json-out $TEST_DIR/zero_output.onnx
+edge_ai: output path '$REPO_ROOT/build/path-conflict-tests/zero_output.onnx' conflicts with model path '$REPO_ROOT/build/path-conflict-tests/zero_output.onnx'
+# exit code: 2
+$ sha256sum $TEST_DIR/zero_output.onnx (after)
+22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697  $REPO_ROOT/build/path-conflict-tests/zero_output.onnx
 $ "$MODEL_DIR/venv/bin/python" -I tools/compare_cpp_reference.py --edge-ai build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image-dir "$MODEL_DIR/test-images" --reference-results docs/reference-inference-results.json --out-dir build/reference-comparison
 reference model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+reference thresholds: conf=0.25 iou=0.45
+image set: 6 images; all SHA256 values match the reference
 crazing_101.jpg: OK: detections cpp/ref=2/2 class_ok=True conf_max_diff=1.192e-06 bbox_max_diff=1.907e-05 blob_max_diff=5.960e-08 (tolerances conf=1e-05 bbox=0.0001 blob=1e-06)
 inclusion_1.jpg: OK: detections cpp/ref=4/4 class_ok=True conf_max_diff=1.196e-07 bbox_max_diff=1.146e-05 blob_max_diff=2.980e-08 (tolerances conf=1e-05 bbox=0.0001 blob=1e-06)
 patches_1.jpg: OK: detections cpp/ref=3/3 class_ok=True conf_max_diff=2.381e-07 bbox_max_diff=9.555e-06 blob_max_diff=5.960e-08 (tolerances conf=1e-05 bbox=0.0001 blob=1e-06)

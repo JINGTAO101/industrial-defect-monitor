@@ -14,6 +14,7 @@ Exit code 0 only when all images pass all tolerances.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -71,15 +72,60 @@ def main() -> int:
         print(f"error: model not found: {args.model}", file=sys.stderr)
         return 2
     reference_data = json.loads(args.reference_results.read_text(encoding="utf-8"))
-    reference_by_name = {item["name"]: item for item in reference_data["images"]}
-    reference_sha = reference_data["model"]["sha256"]
-    print(f"reference model sha256: {reference_sha}")
-    reference_preprocess = load_reference_preprocess()
-
-    images = sorted(args.image_dir.glob("*.jpg"))
-    if not images:
-        print(f"error: no JPG images in {args.image_dir}", file=sys.stderr)
+    reference_images = reference_data["images"]
+    reference_by_name = {item["name"]: item for item in reference_images}
+    if len(reference_by_name) != len(reference_images):
+        print("error: duplicate image names in reference results", file=sys.stderr)
         return 2
+    expected_names = sorted(item["name"] for item in reference_images)
+    if not expected_names:
+        print("error: reference results contain no images", file=sys.stderr)
+        return 2
+
+    reference_sha = reference_data["model"]["sha256"]
+    reference_conf = float(reference_data["thresholds"]["conf"])
+    reference_iou = float(reference_data["thresholds"]["iou"])
+    print(f"reference model sha256: {reference_sha}")
+    print(f"reference thresholds: conf={reference_conf} iou={reference_iou}")
+    if abs(reference_conf - args.conf) > 1e-9 or abs(reference_iou - args.iou) > 1e-9:
+        print(
+            f"error: requested thresholds conf={args.conf} iou={args.iou} "
+            f"do not match the reference results "
+            f"(conf={reference_conf}, iou={reference_iou})",
+            file=sys.stderr,
+        )
+        return 2
+
+    actual_names = {path.name for path in args.image_dir.glob("*.jpg")}
+    missing = sorted(set(expected_names) - actual_names)
+    extra = sorted(actual_names - set(expected_names))
+    if missing or extra:
+        print(
+            f"error: image set mismatch: missing={missing} extra={extra}; "
+            f"the reference requires exactly {len(expected_names)} images",
+            file=sys.stderr,
+        )
+        return 1
+
+    images = []
+    for name in expected_names:
+        item = reference_by_name[name]
+        image_path = args.image_dir / name
+        expected_sha = item.get("sha256", "")
+        if not expected_sha:
+            print(f"error: reference has no SHA256 for {name}", file=sys.stderr)
+            return 1
+        actual_sha = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        if actual_sha != expected_sha:
+            print(
+                f"error: SHA256 mismatch for {image_path.name}: "
+                f"got {actual_sha}, reference {expected_sha}",
+                file=sys.stderr,
+            )
+            return 1
+        images.append(image_path)
+    print(f"image set: {len(images)} images; all SHA256 values match the reference")
+    reference_preprocess = load_reference_preprocess()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     failures = 0

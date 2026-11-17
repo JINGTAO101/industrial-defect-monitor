@@ -8,6 +8,9 @@ endif()
 if(NOT EXISTS "${BIN}")
     message(FATAL_ERROR "edge_ai executable not found: ${BIN}")
 endif()
+if(NOT DEFINED FIXTURES OR NOT EXISTS "${FIXTURES}/non_square_320x200.png")
+    message(FATAL_ERROR "FIXTURES is not set or missing non_square_320x200.png")
+endif()
 
 # 1. --help must exit 0 and print usage.
 execute_process(
@@ -67,6 +70,57 @@ expect_invalid_overrides_flag(--help --bogus)
 expect_invalid_overrides_flag(--version --bogus)
 expect_invalid_overrides_flag(--bogus --help)
 expect_invalid_overrides_flag(--bogus --version)
+
+# 3b. A value-taking option must not consume a following option as its value.
+function(expect_missing_value)
+    execute_process(
+        COMMAND "${BIN}" ${ARGN}
+        RESULT_VARIABLE rc
+        OUTPUT_VARIABLE out
+        ERROR_VARIABLE err
+    )
+    if(rc EQUAL 0)
+        message(FATAL_ERROR "arguments '${ARGN}': expected non-zero exit, got 0")
+    endif()
+    if(NOT err MATCHES "missing value")
+        message(FATAL_ERROR "arguments '${ARGN}': stderr missing 'missing value'; got: ${err}")
+    endif()
+    if(NOT out STREQUAL "")
+        message(FATAL_ERROR "arguments '${ARGN}': expected empty stdout, got: ${out}")
+    endif()
+endfunction()
+
+expect_missing_value(--model)
+expect_missing_value(--image)
+expect_missing_value(--json-out)
+expect_missing_value(--dump-input)
+expect_missing_value(--conf)
+expect_missing_value(--iou)
+expect_missing_value(--help --model --bogus)
+expect_missing_value(--image --help)
+expect_missing_value(--version --conf --bogus)
+
+# 3c. A value that starts with '-' is passed with the --option=value form.
+execute_process(
+    COMMAND "${BIN}"
+        --model=--bogus
+        --image=${FIXTURES}/non_square_320x200.png
+    RESULT_VARIABLE equals_rc
+    OUTPUT_VARIABLE equals_out
+    ERROR_VARIABLE equals_err
+)
+if(equals_rc EQUAL 0)
+    message(FATAL_ERROR "--model=--bogus unexpectedly succeeded")
+endif()
+if(NOT equals_rc EQUAL 1)
+    message(FATAL_ERROR "--model=--bogus should reach model loading and exit 1, got ${equals_rc}: ${equals_err}")
+endif()
+if(NOT equals_err MATCHES "model file not found: --bogus")
+    message(FATAL_ERROR "leading-dash value was not passed as a path; stderr: ${equals_err}")
+endif()
+if(NOT equals_out STREQUAL "")
+    message(FATAL_ERROR "--model=--bogus wrote stdout: ${equals_out}")
+endif()
 
 # 4. Unexpected positional argument must also exit non-zero.
 execute_process(

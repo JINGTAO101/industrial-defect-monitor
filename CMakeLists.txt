@@ -152,6 +152,7 @@ if(BUILD_TESTING)
         NAME cli_behavior
         COMMAND ${CMAKE_COMMAND}
             -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_tests.cmake
     )
 
@@ -172,6 +173,15 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_empty_detections.cmake
     )
 
+    add_test(
+        NAME cli_path_conflicts
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/path-conflict-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_path_conflict_tests.cmake
+    )
+
     if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)
         add_test(
             NAME cpp_reference_comparison
@@ -182,6 +192,19 @@ if(BUILD_TESTING)
                 --image-dir ${EDGE_AI_TEST_IMAGES_DIR}
                 --reference-results ${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-inference-results.json
                 --out-dir ${CMAKE_BINARY_DIR}/reference-comparison
+        )
+
+        add_test(
+            NAME cpp_reference_rejects_incomplete_inputs
+            COMMAND ${CMAKE_COMMAND}
+                -DPYTHON=${EDGE_AI_PYTHON}
+                -DEDGE_AI=$<TARGET_FILE:edge_ai>
+                -DMODEL=${EDGE_AI_MODEL_PATH}
+                -DIMAGE_DIR=${EDGE_AI_TEST_IMAGES_DIR}
+                -DREFERENCE_RESULTS=${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-inference-results.json
+                -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_cpp_reference.py
+                -DTEST_DIR=${CMAKE_BINARY_DIR}/reference-guard-tests
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compare_reference_guard_tests.cmake
         )
     endif()
 endif()

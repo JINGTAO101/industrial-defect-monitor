@@ -54,6 +54,8 @@ void printUsage(std::ostream& os)
        << "  --json-out <path>    Write machine-readable detection result JSON\n"
        << "  --dump-input <path>  Write the float32 NCHW input tensor (raw)\n"
        << "\n"
+       << "Values beginning with '-' must use the --option=value form\n"
+       << "(for example: --model=-model.onnx).\n"
        << "With no --model/--image, edge_ai prints its startup banner.\n"
        << "Unknown options are rejected with a non-zero exit code.\n";
 }
@@ -90,68 +92,172 @@ bool parseFloatOption(
     }
 }
 
+std::filesystem::path normalizedPath(const std::string& path)
+{
+    std::error_code error_code;
+    std::filesystem::path absolute =
+        std::filesystem::absolute(path, error_code);
+    if (error_code) {
+        absolute = std::filesystem::path(path);
+        error_code.clear();
+    }
+    const std::filesystem::path canonical =
+        std::filesystem::weakly_canonical(absolute, error_code);
+    if (!error_code) {
+        return canonical;
+    }
+    return absolute.lexically_normal();
+}
+
+// Detects identical paths, relative aliases, symlinks and hard links.
+bool pathsConflict(const std::string& first, const std::string& second)
+{
+    if (first.empty() || second.empty()) {
+        return false;
+    }
+
+    std::error_code error_code;
+    const bool first_exists = std::filesystem::exists(first, error_code);
+    error_code.clear();
+    const bool second_exists = std::filesystem::exists(second, error_code);
+    if (first_exists && second_exists) {
+        error_code.clear();
+        if (std::filesystem::equivalent(first, second, error_code) &&
+            !error_code) {
+            return true;
+        }
+    }
+    return normalizedPath(first) == normalizedPath(second);
+}
+
+bool validateOutputPaths(const Options& options, std::string& error)
+{
+    if (!options.dump_input.empty() && !options.json_out.empty() &&
+        pathsConflict(options.dump_input, options.json_out)) {
+        error = "output paths '" + options.dump_input + "' and '" +
+                options.json_out + "' refer to the same file";
+        return false;
+    }
+    if (!options.dump_input.empty()) {
+        if (pathsConflict(options.dump_input, options.model_path)) {
+            error = "output path '" + options.dump_input +
+                    "' conflicts with model path '" + options.model_path + "'";
+            return false;
+        }
+        if (pathsConflict(options.dump_input, options.image_path)) {
+            error = "output path '" + options.dump_input +
+                    "' conflicts with image path '" + options.image_path + "'";
+            return false;
+        }
+    }
+    if (!options.json_out.empty()) {
+        if (pathsConflict(options.json_out, options.model_path)) {
+            error = "output path '" + options.json_out +
+                    "' conflicts with model path '" + options.model_path + "'";
+            return false;
+        }
+        if (pathsConflict(options.json_out, options.image_path)) {
+            error = "output path '" + options.json_out +
+                    "' conflicts with image path '" + options.image_path + "'";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
 {
     for (int i = 1; i < argc; ++i) {
-        const std::string_view argument = argv[i];
+        const std::string argument = argv[i];
+        std::string option = argument;
+        std::string inline_value;
+        bool has_inline_value = false;
+        if (argument.rfind("--", 0) == 0) {
+            const std::size_t equals = argument.find('=');
+            if (equals != std::string::npos) {
+                option = argument.substr(0, equals);
+                inline_value = argument.substr(equals + 1);
+                has_inline_value = true;
+            }
+        }
 
-        if (argument == "-h" || argument == "--help") {
+        if (option == "-h" || option == "--help") {
+            if (has_inline_value) {
+                error = option + " does not take a value";
+                return false;
+            }
             options.show_help = true;
             continue;
         }
-        if (argument == "-V" || argument == "--version") {
+        if (option == "-V" || option == "--version") {
+            if (has_inline_value) {
+                error = option + " does not take a value";
+                return false;
+            }
             options.show_version = true;
             continue;
         }
 
         const auto take_value = [&](const char* name, std::string& target) {
+            if (has_inline_value) {
+                if (inline_value.empty()) {
+                    error = std::string("empty value for ") + name;
+                    return false;
+                }
+                target = inline_value;
+                return true;
+            }
             if (i + 1 >= argc) {
                 error = std::string("missing value for ") + name;
                 return false;
             }
-            target = argv[++i];
-            if (target.empty()) {
-                error = std::string("empty value for ") + name;
+            const std::string_view next = argv[i + 1];
+            if (next.empty() || next.front() == '-') {
+                error = std::string("missing value for ") + name +
+                        " (use " + name +
+                        "=<value> when the value starts with '-')";
                 return false;
             }
+            target = std::string(next);
+            ++i;
             return true;
         };
 
-        if (argument == "--model") {
+        if (option == "--model") {
             if (!take_value("--model", options.model_path)) {
                 return false;
             }
-        } else if (argument == "--image") {
+        } else if (option == "--image") {
             if (!take_value("--image", options.image_path)) {
                 return false;
             }
-        } else if (argument == "--json-out") {
+        } else if (option == "--json-out") {
             if (!take_value("--json-out", options.json_out)) {
                 return false;
             }
-        } else if (argument == "--dump-input") {
+        } else if (option == "--dump-input") {
             if (!take_value("--dump-input", options.dump_input)) {
                 return false;
             }
-        } else if (argument == "--conf") {
+        } else if (option == "--conf") {
             std::string value;
             if (!take_value("--conf", value) ||
                 !parseFloatOption("--conf", value,
                                   options.conf_threshold, error)) {
                 return false;
             }
-        } else if (argument == "--iou") {
+        } else if (option == "--iou") {
             std::string value;
             if (!take_value("--iou", value) ||
                 !parseFloatOption("--iou", value,
                                   options.iou_threshold, error)) {
                 return false;
             }
-        } else if (!argument.empty() && argument.front() == '-') {
-            error = "unknown option '" + std::string(argument) + "'";
+        } else if (!option.empty() && option.front() == '-') {
+            error = "unknown option '" + option + "'";
             return false;
         } else {
-            error = "unexpected argument '" + std::string(argument) + "'";
+            error = "unexpected argument '" + argument + "'";
             return false;
         }
     }
@@ -382,6 +488,12 @@ bool writeInputTensor(
 int runInference(const Options& options)
 {
     std::string error;
+    std::string path_error;
+    if (!validateOutputPaths(options, path_error)) {
+        std::cerr << kProgram << ": " << path_error << "\n";
+        return 2;
+    }
+
     const auto runner = edge_ai::ModelRunner::load(options.model_path, error);
     if (!runner) {
         std::cerr << kProgram << ": " << error << "\n";
