@@ -35,3 +35,10 @@ models/
 *.pth
 *.weights
 *.tflite
+
+# Tiny synthetic ONNX fixtures for contract-validation tests (no trained weights)
+!tests/fixtures/*.onnx
+
+# Python caches
+__pycache__/
+*.py[cod]

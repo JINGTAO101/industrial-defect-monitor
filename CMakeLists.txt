@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(edge_ai_system
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Industrial defect monitoring system for edge devices"
     LANGUAGES CXX
 )
@@ -11,59 +11,179 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# We add exactly one RUNPATH below; CMake's automatic RPATH generation can
+# produce empty entries (which make the loader search the current directory).
+set(CMAKE_SKIP_RPATH TRUE)
 
 # 可执行文件统一输出到 build/bin
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# 基础信息模块（后续可替换/扩展为真正的系统状态与环境探测）
+# ---- 依赖 ----------------------------------------------------------------
+
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs dnn)
+find_package(OpenSSL REQUIRED)
+
+# ONNX Runtime C++ CPU 包：解压后包含 include/ 与 lib/。
+# 用法：cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.32.0 ...
+set(ONNXRUNTIME_ROOT "" CACHE PATH "Root of the ONNX Runtime C++ package")
+if(NOT ONNXRUNTIME_ROOT AND DEFINED ENV{ONNXRUNTIME_ROOT})
+    set(ONNXRUNTIME_ROOT "$ENV{ONNXRUNTIME_ROOT}")
+endif()
+
+find_path(ONNXRUNTIME_INCLUDE_DIR
+    NAMES onnxruntime_cxx_api.h
+    HINTS
+        "${ONNXRUNTIME_ROOT}/include"
+        "${ONNXRUNTIME_ROOT}/include/onnxruntime"
+        "$ENV{ONNXRUNTIME_ROOT}/include"
+        "$ENV{ONNXRUNTIME_ROOT}/include/onnxruntime"
+)
+find_library(ONNXRUNTIME_LIBRARY
+    NAMES onnxruntime
+    HINTS
+        "${ONNXRUNTIME_ROOT}/lib"
+        "${ONNXRUNTIME_ROOT}/lib64"
+        "$ENV{ONNXRUNTIME_ROOT}/lib"
+        "$ENV{ONNXRUNTIME_ROOT}/lib64"
+)
+
+if(NOT ONNXRUNTIME_INCLUDE_DIR OR NOT ONNXRUNTIME_LIBRARY)
+    message(FATAL_ERROR
+        "ONNX Runtime C++ was not found. Download the CPU package "
+        "(onnxruntime-linux-x64-<version>.tgz) and pass "
+        "-DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-<version>")
+endif()
+get_filename_component(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_LIBRARY}" DIRECTORY)
+message(STATUS "ONNX Runtime headers: ${ONNXRUNTIME_INCLUDE_DIR}")
+message(STATUS "ONNX Runtime library: ${ONNXRUNTIME_LIBRARY}")
+message(STATUS "OpenCV: ${OpenCV_VERSION}")
+
+# ---- 公共编译选项 ---------------------------------------------------------
+
+function(edge_ai_enable_warnings target)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
+# ---- 基础模块 -------------------------------------------------------------
+
 add_library(system_info STATIC
     src/system_info.cpp
 )
+target_include_directories(system_info PUBLIC ${PROJECT_SOURCE_DIR}/include)
+edge_ai_enable_warnings(system_info)
 
-target_include_directories(system_info
+# 预处理/后处理/契约校验：不依赖 ONNX Runtime，可单独测试。
+add_library(edge_ai_core STATIC
+    src/model_contract.cpp
+    src/image_preprocess.cpp
+    src/postprocess.cpp
+)
+target_include_directories(edge_ai_core
     PUBLIC
         ${PROJECT_SOURCE_DIR}/include
+        ${OpenCV_INCLUDE_DIRS}
 )
+target_link_libraries(edge_ai_core PUBLIC ${OpenCV_LIBS})
+target_compile_features(edge_ai_core PUBLIC cxx_std_17)
+edge_ai_enable_warnings(edge_ai_core)
 
-# 主程序 edge_ai
+# ONNX Runtime C++ 推理封装。
+add_library(edge_ai_inference STATIC
+    src/model_runner.cpp
+    src/sha256.cpp
+)
+target_include_directories(edge_ai_inference PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+target_link_libraries(edge_ai_inference
+    PUBLIC
+        edge_ai_core
+        ${ONNXRUNTIME_LIBRARY}
+        OpenSSL::Crypto
+)
+edge_ai_enable_warnings(edge_ai_inference)
+
 add_executable(edge_ai
     src/main.cpp
 )
+target_link_libraries(edge_ai PRIVATE edge_ai_inference system_info)
+target_compile_definitions(edge_ai PRIVATE EDGE_AI_VERSION="${PROJECT_VERSION}")
+edge_ai_enable_warnings(edge_ai)
 
-target_link_libraries(edge_ai
-    PRIVATE
-        system_info
-)
+# 让 build/bin/edge_ai 直接找到 ONNX Runtime 共享库。
+# CMAKE_SKIP_RPATH 已关闭 CMake 的自动 RPATH，这里只加入一个明确目录。
+target_link_options(edge_ai PRIVATE "-Wl,-rpath,${ONNXRUNTIME_LIB_DIR}")
 
-target_compile_features(edge_ai PRIVATE cxx_std_17)
+# ---- 可选的真实模型集成测试配置 ------------------------------------------
 
-target_compile_definitions(edge_ai
-    PRIVATE
-        EDGE_AI_VERSION="${PROJECT_VERSION}"
-)
+set(EDGE_AI_MODEL_PATH "" CACHE FILEPATH
+    "Path to the verified neu_det_yolov8n_best.onnx (optional, enables integration tests)")
+set(EDGE_AI_TEST_IMAGES_DIR "" CACHE PATH
+    "Directory containing the six NEU-DET test JPGs (optional, enables reference comparison)")
+set(EDGE_AI_PYTHON "" CACHE FILEPATH
+    "Python interpreter with tools/requirements-reference.txt installed")
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(system_info PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(edge_ai PRIVATE -Wall -Wextra -Wpedantic)
-endif()
-
-# OpenCV 本阶段不参与编译，仅探测并记录版本，
-# 供后续摄像头/图像预处理/推理模块使用。
-find_package(OpenCV QUIET)
-if(OpenCV_FOUND)
-    message(STATUS "OpenCV found: ${OpenCV_VERSION} (optional at this stage)")
-else()
-    message(STATUS "OpenCV not found (optional at this stage)")
-endif()
+# ---- 测试 -----------------------------------------------------------------
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(edge_ai_tests
+        tests/unit_tests.cpp
+    )
+    target_link_libraries(edge_ai_tests PRIVATE edge_ai_core)
+    target_include_directories(edge_ai_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    edge_ai_enable_warnings(edge_ai_tests)
+
+    foreach(test_name
+            preprocess_non_square
+            postprocess_empty
+            postprocess_nms_same_class
+            postprocess_nms_cross_class
+            postprocess_coordinate_restore
+            postprocess_nonfinite
+            postprocess_shape_mismatch
+            class_mapping_unknown
+            contract_validation
+            class_metadata_parser)
+        add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
+    endforeach()
+
     add_test(
         NAME cli_behavior
         COMMAND ${CMAKE_COMMAND}
             -DBIN=$<TARGET_FILE:edge_ai>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_tests.cmake
     )
+
+    add_test(
+        NAME cli_inference_failures
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DREAL_MODEL=${EDGE_AI_MODEL_PATH}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_inference_tests.cmake
+    )
+
+    add_test(
+        NAME cli_empty_detections
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_empty_detections.cmake
+    )
+
+    if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)
+        add_test(
+            NAME cpp_reference_comparison
+            COMMAND ${EDGE_AI_PYTHON} -I
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_cpp_reference.py
+                --edge-ai $<TARGET_FILE:edge_ai>
+                --model ${EDGE_AI_MODEL_PATH}
+                --image-dir ${EDGE_AI_TEST_IMAGES_DIR}
+                --reference-results ${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-inference-results.json
+                --out-dir ${CMAKE_BINARY_DIR}/reference-comparison
+        )
+    endif()
 endif()
 
 install(TARGETS edge_ai RUNTIME DESTINATION bin)

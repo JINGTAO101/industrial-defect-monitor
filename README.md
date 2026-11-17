@@ -1,8 +1,14 @@
-# Edge AI 工业缺陷检测系统 —— 阶段一：工程骨架
+# Edge AI 工业缺陷检测系统
 
-面向边缘设备的工业缺陷检测系统。当前阶段只建立可独立构建、运行和测试的
-C++17 工程骨架，包含可执行文件 `edge_ai` 的基础命令行接口与 CTest 测试；
-摄像头、模型推理和网络模块将在后续阶段加入。
+面向边缘设备的工业表面缺陷检测系统。当前已完成：
+
+- **任务 1 / 2A**：C++17 工程骨架、YOLOv8n-NEU-DET 模型来源/许可/接口核验、
+  Python 参考推理；
+- **任务 2B**：基于 ONNX Runtime C++ API 和 CPU ExecutionProvider 的单图推理，
+  包括模型契约校验、letterbox 预处理、类别感知 NMS、坐标还原、失败路径测试，
+  以及与 2A 参考结果的逐项对照。
+
+摄像头、多线程、SQLite、MQTT 不在当前阶段范围内。
 
 ## 已验证环境
 
@@ -14,78 +20,88 @@ C++17 工程骨架，包含可执行文件 `edge_ai` 的基础命令行接口与
 | 架构 | x86_64 |
 | CPU | AMD Ryzen 5 6600U（VMware 虚拟机，4 vCPU） |
 | 内存 | 5.7 GiB（另有 4.0 GiB swap） |
-| GCC / G++ | 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1) |
-| CMake | 3.28.3 |
-| GDB | 15.1 |
-| Git | 2.43.0 |
-| Ninja | 1.11.1 |
-| OpenCV | 4.6.0（libopencv-dev 4.6.0+dfsg-13.1ubuntu1，Ubuntu 24.04 官方源） |
-
-> OpenCV 在本阶段由 CMake 以可选依赖方式探测，尚未链接进 `edge_ai`；已通过
-> 独立的 C++17 编译/链接测试确认 4.6.0 可用。摄像头与图像预处理模块接入时
-> 再正式链接。
+| GCC / G++ | 13.3.0 |
+| CMake / Ninja | 3.28.3 / 1.11.1 |
+| GDB / Git | 15.1 / 2.43.0 |
+| OpenCV | 4.6.0（`libopencv-dev`） |
+| OpenSSL | 3.0.13（`libssl-dev`） |
+| ONNX Runtime C++ | 1.32.0 CPU（`libonnxruntime.so.1.32.0`） |
+| Python（参考推理） | 3.12.3，ONNX Runtime 1.32.0，OpenCV 4.10.0 |
 
 ## 依赖
 
-必需：
-
-- GCC/G++，支持 C++17
-- CMake >= 3.20
-- Git
-
-开发与后续阶段：
-
-- GDB（调试）
-- Ninja（可选，更快的构建后端；也可使用默认的 Makefiles）
-- OpenCV 4.x（可选，后续图像/摄像头模块使用）
-
-在 Ubuntu 上安装：
-
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake gdb git ninja-build pkg-config libopencv-dev
+sudo apt install -y build-essential cmake gdb git ninja-build pkg-config \
+  libopencv-dev libssl-dev
 ```
+
+ONNX Runtime C++ CPU 包（必需）：
+
+```bash
+ORT_DIR="$HOME/edge-ai-models/onnxruntime-1.32.0"
+mkdir -p "$ORT_DIR" && cd "$ORT_DIR"
+curl -fL \
+  https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-linux-x64-1.32.0.tgz \
+  -o onnxruntime-linux-x64-1.32.0.tgz
+sha256sum onnxruntime-linux-x64-1.32.0.tgz
+# bb169b7e374731730d2ae406fb39de7be4b315f413a9132efe896261c31bb503
+tar -xzf onnxruntime-linux-x64-1.32.0.tgz
+```
+
+本工程通过 `-DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.32.0` 查找
+头文件和共享库；不使用该 tarball 自带的 CMake config（其路径布局与实际包
+不一致）。
+
+模型和六张测试图片不提交到仓库。来源、SHA256、许可状态和下载/校验脚本见
+[docs/model-verification.md](docs/model-verification.md) 与
+`tools/reproduce_reference_verification.sh`。
 
 ## 构建
 
-从干净构建目录配置并编译：
-
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DONNXRUNTIME_ROOT="$HOME/edge-ai-models/onnxruntime-1.32.0/onnxruntime-linux-x64-1.32.0"
 cmake --build build
 ```
 
-如果没有安装 Ninja，去掉 `-G Ninja` 即可使用默认生成器：
+启用真实模型集成测试时，额外传入（均为可选）：
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DONNXRUNTIME_ROOT="$HOME/edge-ai-models/onnxruntime-1.32.0/onnxruntime-linux-x64-1.32.0" \
+  -DEDGE_AI_MODEL_PATH="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
+  -DEDGE_AI_TEST_IMAGES_DIR="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/test-images" \
+  -DEDGE_AI_PYTHON="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/venv/bin/python"
 ```
 
-生成的可执行文件位于 `build/bin/edge_ai`。工程启用 C++17
-（`CMAKE_CXX_STANDARD 17`，禁用编译器扩展），并为 GCC/Clang 开启
-`-Wall -Wextra -Wpedantic`。
+生成的可执行文件为 `build/bin/edge_ai`，测试程序为
+`build/bin/edge_ai_tests`。
 
 ## 运行
 
 ```bash
-# 查看帮助
+# 帮助 / 版本
 ./build/bin/edge_ai --help
-
-# 查看版本
 ./build/bin/edge_ai --version
 
 # 无参数：打印启动横幅
 ./build/bin/edge_ai
 
-# 非法参数：向 stderr 输出错误并以非零码（2）退出
+# 单图推理
+./build/bin/edge_ai \
+  --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
+  --image "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/test-images/crazing_101.jpg" \
+  --conf 0.25 --iou 0.45 \
+  --json-out build/verification/crazing_101.cpp.json
+
+# 非法参数：stderr 报错，退出码 2
 ./build/bin/edge_ai --bogus
 ```
 
-程序会先完整校验所有参数，再决定是否输出版本或帮助。因此 `--help --bogus`
-和 `--version --bogus` 不会被当作成功调用：未知选项或多余位置参数会输出
-明确错误并返回退出码 2；只有全部参数合法时，`--help` / `-h` 才以退出码 0
-结束。
+主要参数：`--model`、`--image`、`--conf`（默认 0.25）、`--iou`（默认 0.45）、
+`--json-out`、`--dump-input`。参数会先完整校验；`--help --bogus` 等组合仍会
+返回非零。模型/图片/推理失败返回 1。
 
 ## 测试
 
@@ -93,102 +109,132 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-CTest 中的 `cli_behavior` 测试会真实执行 `edge_ai`，检查：
+不提供真实模型路径时运行 13 个测试（单元测试 + CLI 失败路径 + 空检测）；
+提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时
+额外运行 `cpp_reference_comparison`，共 14 个。本次验证 14/14 通过。
 
-1. `--help` 退出码为 0，且输出包含用法说明；
-2. 未知选项退出码非 0，stderr 包含错误原因与 `--help` 提示；
-3. 非法参数优先于帮助/版本标志：`--help --bogus`、`--version --bogus`
-   以及反序写法均退出非 0，stdout 为空；
-4. 多余位置参数退出码非 0；
-5. 无参数运行时退出码为 0，并打印启动横幅。
+`cli_inference_failures` 覆盖：
+
+- 模型文件不存在；
+- 模型损坏/无法加载；
+- 输入形状不符合已核验契约；
+- 输出形状不符合已核验契约；
+- 图片无法读取（需要真实模型）。
+
+单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、非有限输出、
+输出尺寸错误、未知类别 `Unknown`+anomaly、契约校验和类别 metadata 解析。
+`cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
+无候选时返回 `detections: 0` 且退出码为 0。
 
 ## 目录结构
 
 ```text
 .
-├── CMakeLists.txt          # CMake 构建定义（C++17、目标 edge_ai、CTest）
+├── CMakeLists.txt
 ├── README.md
-├── .gitignore              # 忽略构建产物、本地配置与模型权重
+├── .gitignore
 ├── include/
-│   └── system_info.hpp     # 系统信息模块接口
+│   ├── image_preprocess.hpp
+│   ├── model_contract.hpp
+│   ├── model_runner.hpp
+│   ├── postprocess.hpp
+│   ├── sha256.hpp
+│   └── system_info.hpp
 ├── src/
-│   ├── main.cpp            # edge_ai 入口与命令行参数处理
-│   └── system_info.cpp     # 系统信息模块实现
+│   ├── image_preprocess.cpp
+│   ├── main.cpp
+│   ├── model_contract.cpp
+│   ├── model_runner.cpp
+│   ├── postprocess.cpp
+│   ├── sha256.cpp
+│   └── system_info.cpp
 ├── docs/
-│   ├── model-verification.md          # 任务 2A 模型来源/许可/接口/参考推理记录
+│   ├── model-verification.md          # 2A 模型来源/许可/接口/参考推理
+│   ├── cpp-inference.md               # 2B C++ 推理与对照记录
+│   ├── cpp-inference-run.txt          # 2B 干净构建/CTest/推理/失败路径运行日志
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
-│   ├── neu_det_reference.py           # ONNX Runtime CPU 参考推理脚本
-│   ├── compare_author_predict.py      # 与模型作者参考实现的逐项对照
-│   ├── reproduce_reference_verification.sh  # 干净目录一键下载/校验/重跑六图
-│   └── requirements-reference.txt     # 参考推理环境固定版本
+│   ├── neu_det_reference.py
+│   ├── compare_author_predict.py
+│   ├── compare_cpp_reference.py       # C++ 与 2A 参考结果对照
+│   ├── reproduce_reference_verification.sh
+│   ├── generate_test_fixtures.py
+│   └── requirements-reference.txt
 └── tests/
-    └── cli_tests.cmake     # CTest 调用的 CLI 行为测试脚本
+    ├── cli_tests.cmake
+    ├── cli_inference_tests.cmake
+    ├── cli_empty_detections.cmake
+    ├── unit_tests.cpp
+    └── fixtures/                      # 合成图片/契约错误 ONNX/空输出模型/损坏模型
 ```
 
-构建目录 `build/` 完全由 CMake 生成，不纳入版本库。模型权重、密钥和本地
-环境文件同样被 `.gitignore` 排除。
+构建目录 `build/`、模型权重、测试图片和本地环境文件均不纳入版本库。
 
-## 模型核验（阶段 2A）
+## 阶段 2A：模型核验
 
 候选模型为 YOLOv8n-NEU-DET（`winthegame259/steel-surface-defect-detection`
-release v1.0.0）。模型来源、SHA256、AGPL-3.0/数据集许可说明、输入输出契约、
-六类标签顺序、固定图片参考推理结果和待验证事项，见
-[docs/model-verification.md](docs/model-verification.md)。
+release v1.0.0）。详细记录见 [docs/model-verification.md](docs/model-verification.md)：
 
-模型权重与测试图片不提交到仓库；按文档中的固定 URL 下载并核对 SHA256 后，
-用 `tools/neu_det_reference.py` 复现参考推理结果。干净环境可一键执行：
+- ONNX 文件 SHA256 与 release digest 一致；
+- 输入 `images [1,3,640,640] float32`，BGR、letterbox、`/255`、NCHW；
+- 输出 `output0 [1,10,8400] float32`，通道优先、未内置 NMS；
+- 类别顺序来自 ONNX metadata：`crazing, inclusion, patches, pitted_surface,
+  rolled-in_scale, scratches`；
+- 模型的 AGPL-3.0 与 NEU-DET 学术研究限制仍是待确认事项。
 
-```bash
-VENV="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/venv" \
-MODEL_DIR="$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0" \
-tools/reproduce_reference_verification.sh
-```
+## 阶段 2B：C++ 单图推理
 
-## 验收记录
+完整记录、失败输出和限制见 [docs/cpp-inference.md](docs/cpp-inference.md)。
+关键结果：
+
+- ONNX Runtime 1.32.0 CPU ExecutionProvider 加载成功，模型 SHA256 与 2A 一致；
+- 六张固定图的检测数量、类别、置信度和 bbox 与 2A Python 参考一致：
+  `max_conf_diff=1.192e-06`、`max_bbox_diff=3.436e-05`、
+  `max_blob_diff=5.960e-08`；
+- 320×200 非方形图验证 letterbox pad=(0,120)，Python/C++ 预处理 Tensor
+  最大差 `5.960e-08`；
+- FR-007：未知 ID 返回 `Unknown` 并记录 anomaly，不会静默映射到已有类别。
+
+## 验收记录（2B）
 
 ```text
-$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
--- OpenCV found: 4.6.0 (optional at this stage)
+$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DONNXRUNTIME_ROOT=... -DEDGE_AI_MODEL_PATH=... \
+    -DEDGE_AI_TEST_IMAGES_DIR=... -DEDGE_AI_PYTHON=...
+-- ONNX Runtime library: .../libonnxruntime.so
 -- Configuring done
 -- Generating done
 
 $ cmake --build build
-[4/4] Linking CXX executable bin/edge_ai
-
-$ ./build/bin/edge_ai --help
-edge_ai - Industrial defect monitoring system (edge AI)
-
-Usage:
-  edge_ai [OPTION]
-
-Options:
-  -h, --help     Show this help message and exit
-  -V, --version  Show version information and exit
-
-With no options, edge_ai prints its startup banner.
-# exit code: 0
-
-$ ./build/bin/edge_ai --bogus
-edge_ai: unknown option '--bogus'
-Try 'edge_ai --help' for more information.
-# exit code: 2
-
-$ ./build/bin/edge_ai --help --bogus
-edge_ai: unknown option '--bogus'
-Try 'edge_ai --help' for more information.
-# exit code: 2 (help output is suppressed)
-
-$ ./build/bin/edge_ai --version --bogus
-edge_ai: unknown option '--bogus'
-Try 'edge_ai --help' for more information.
-# exit code: 2 (version output is suppressed)
+# 构建完成：build/bin/edge_ai、build/bin/edge_ai_tests
 
 $ ctest --test-dir build --output-on-failure
-1/1 Test #1: cli_behavior .....................   Passed
-100% tests passed, 0 tests failed out of 1
+...
+100% tests passed, 0 tests failed out of 14
 
-$ pkg-config --modversion opencv4
-4.6.0
+$ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
+    --conf 0.25 --iou 0.45
+ONNX Runtime 1.32.0 providers=CPUExecutionProvider
+input:  images [1, 3, 640, 640] tensor(float)
+output: output0 [1, 10, 8400] tensor(float)
+...
+detections: 2
+  class_id=0 crazing conf=0.525822 bbox_xyxy=[48.0117, 37.2517, 195.252, 94.7151]
+  class_id=0 crazing conf=0.484310 bbox_xyxy=[4.31551, 108.104, 180.438, 199.272]
+
+$ ./build/bin/edge_ai --model /tmp/does-not-exist.onnx \
+    --image tests/fixtures/non_square_320x200.png
+edge_ai: model file not found: /tmp/does-not-exist.onnx
+# exit code: 1
+
+$ ctest --test-dir build -R cpp_reference_comparison --output-on-failure
+SUMMARY: images=6 failures=0 max_conf_diff=1.192e-06 \
+  max_bbox_diff=3.436e-05 max_blob_diff=5.960e-08
 ```
+
+## 许可与仓库策略
+
+模型代码/权重按仓库与 ONNX metadata 记录为 AGPL-3.0；NEU-DET 只有学术研究
+用途线索，官方没有明确许可证文本。商业使用、闭源分发和测试图再分发仍为
+**待确认**。本仓库不提交模型权重、测试图片、密码或令牌。

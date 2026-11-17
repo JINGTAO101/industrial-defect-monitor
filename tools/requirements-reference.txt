@@ -4,3 +4,5 @@ onnx==1.23.2
 onnxruntime==1.32.0
 numpy==2.5.5
 opencv-python-headless==4.10.0.84
+# Used only by tools/generate_test_fixtures.py.
+pillow==13.0.0
