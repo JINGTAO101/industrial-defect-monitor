@@ -114,12 +114,30 @@ CTest 中的 `cli_behavior` 测试会真实执行 `edge_ai`，检查：
 ├── src/
 │   ├── main.cpp            # edge_ai 入口与命令行参数处理
 │   └── system_info.cpp     # 系统信息模块实现
+├── docs/
+│   ├── model-verification.md          # 任务 2A 模型来源/许可/接口/参考推理记录
+│   ├── reference-inference-results.json
+│   └── reference-inference-run.txt
+├── tools/
+│   ├── neu_det_reference.py           # ONNX Runtime CPU 参考推理脚本
+│   ├── compare_author_predict.py      # 与模型作者参考实现的逐项对照
+│   └── requirements-reference.txt     # 参考推理环境固定版本
 └── tests/
     └── cli_tests.cmake     # CTest 调用的 CLI 行为测试脚本
 ```
 
 构建目录 `build/` 完全由 CMake 生成，不纳入版本库。模型权重、密钥和本地
 环境文件同样被 `.gitignore` 排除。
+
+## 模型核验（阶段 2A）
+
+候选模型为 YOLOv8n-NEU-DET（`winthegame259/steel-surface-defect-detection`
+release v1.0.0）。模型来源、SHA256、AGPL-3.0/数据集许可说明、输入输出契约、
+六类标签顺序、固定图片参考推理结果和待验证事项，见
+[docs/model-verification.md](docs/model-verification.md)。
+
+模型权重与测试图片不提交到仓库；按文档中的固定 URL 下载并核对 SHA256 后，
+用 `tools/neu_det_reference.py` 复现参考推理结果。
 
 ## 验收记录
 

@@ -1,0 +1,6 @@
+# Reference-inference environment verified on 2026-11-18 (Ubuntu 24.04.5, x86_64).
+# The model itself is not installed by pip; see docs/model-verification.md.
+onnx==1.23.2
+onnxruntime==1.32.0
+numpy==2.5.5
+opencv-python-headless==4.10.0.84
