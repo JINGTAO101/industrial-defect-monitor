@@ -24,12 +24,12 @@ $ cmake --build build
 [1/13] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
 [2/13] Linking CXX static library libsystem_info.a
 [3/13] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
-[4/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
-[5/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
+[4/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
+[5/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
 [6/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
 [7/13] Linking CXX static library libedge_ai_core.a
-[8/13] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
-[9/13] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
+[8/13] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
+[9/13] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
 [10/13] Linking CXX executable bin/edge_ai_tests
 [11/13] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
 [12/13] Linking CXX static library libedge_ai_inference.a
@@ -39,41 +39,43 @@ $ ctest --test-dir build --output-on-failure
 Internal ctest changing into directory: $REPO_ROOT/build
 Test project $REPO_ROOT/build
       Start  1: unit_preprocess_non_square
- 1/16 Test  #1: unit_preprocess_non_square ................   Passed    0.04 sec
+ 1/17 Test  #1: unit_preprocess_non_square ................   Passed    0.07 sec
       Start  2: unit_postprocess_empty
- 2/16 Test  #2: unit_postprocess_empty ....................   Passed    0.01 sec
+ 2/17 Test  #2: unit_postprocess_empty ....................   Passed    0.01 sec
       Start  3: unit_postprocess_nms_same_class
- 3/16 Test  #3: unit_postprocess_nms_same_class ...........   Passed    0.01 sec
+ 3/17 Test  #3: unit_postprocess_nms_same_class ...........   Passed    0.01 sec
       Start  4: unit_postprocess_nms_cross_class
- 4/16 Test  #4: unit_postprocess_nms_cross_class ..........   Passed    0.01 sec
+ 4/17 Test  #4: unit_postprocess_nms_cross_class ..........   Passed    0.01 sec
       Start  5: unit_postprocess_coordinate_restore
- 5/16 Test  #5: unit_postprocess_coordinate_restore .......   Passed    0.01 sec
+ 5/17 Test  #5: unit_postprocess_coordinate_restore .......   Passed    0.01 sec
       Start  6: unit_postprocess_nonfinite
- 6/16 Test  #6: unit_postprocess_nonfinite ................   Passed    0.01 sec
-      Start  7: unit_postprocess_shape_mismatch
- 7/16 Test  #7: unit_postprocess_shape_mismatch ...........   Passed    0.01 sec
-      Start  8: unit_class_mapping_unknown
- 8/16 Test  #8: unit_class_mapping_unknown ................   Passed    0.01 sec
-      Start  9: unit_contract_validation
- 9/16 Test  #9: unit_contract_validation ..................   Passed    0.01 sec
-      Start 10: unit_class_metadata_parser
-10/16 Test #10: unit_class_metadata_parser ................   Passed    0.01 sec
-      Start 11: cli_behavior
-11/16 Test #11: cli_behavior ..............................   Passed    1.17 sec
-      Start 12: cli_inference_failures
-12/16 Test #12: cli_inference_failures ....................   Passed    0.58 sec
-      Start 13: cli_empty_detections
-13/16 Test #13: cli_empty_detections ......................   Passed    0.14 sec
-      Start 14: cli_path_conflicts
-14/16 Test #14: cli_path_conflicts ........................   Passed    0.66 sec
-      Start 15: cpp_reference_comparison
-15/16 Test #15: cpp_reference_comparison ..................   Passed    2.31 sec
-      Start 16: cpp_reference_rejects_incomplete_inputs
-16/16 Test #16: cpp_reference_rejects_incomplete_inputs ...   Passed    0.41 sec
+ 6/17 Test  #6: unit_postprocess_nonfinite ................   Passed    0.01 sec
+      Start  7: unit_postprocess_score_range
+ 7/17 Test  #7: unit_postprocess_score_range ..............   Passed    0.01 sec
+      Start  8: unit_postprocess_shape_mismatch
+ 8/17 Test  #8: unit_postprocess_shape_mismatch ...........   Passed    0.01 sec
+      Start  9: unit_class_mapping_unknown
+ 9/17 Test  #9: unit_class_mapping_unknown ................   Passed    0.01 sec
+      Start 10: unit_contract_validation
+10/17 Test #10: unit_contract_validation ..................   Passed    0.01 sec
+      Start 11: unit_class_metadata_parser
+11/17 Test #11: unit_class_metadata_parser ................   Passed    0.01 sec
+      Start 12: cli_behavior
+12/17 Test #12: cli_behavior ..............................   Passed    1.27 sec
+      Start 13: cli_inference_failures
+13/17 Test #13: cli_inference_failures ....................   Passed    0.61 sec
+      Start 14: cli_empty_detections
+14/17 Test #14: cli_empty_detections ......................   Passed    0.16 sec
+      Start 15: cli_path_conflicts
+15/17 Test #15: cli_path_conflicts ........................   Passed    0.70 sec
+      Start 16: cpp_reference_comparison
+16/17 Test #16: cpp_reference_comparison ..................   Passed    2.33 sec
+      Start 17: cpp_reference_rejects_incomplete_inputs
+17/17 Test #17: cpp_reference_rejects_incomplete_inputs ...   Passed    0.35 sec
 
-100% tests passed, 0 tests failed out of 16
+100% tests passed, 0 tests failed out of 17
 
-Total Test time (real) =   5.41 sec
+Total Test time (real) =   5.62 sec
 
 $ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image "$MODEL_DIR/test-images/crazing_101.jpg" --conf 0.25 --iou 0.45 --json-out build/verification/primary.json --dump-input build/verification/primary.bin
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider

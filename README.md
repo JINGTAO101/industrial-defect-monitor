@@ -114,10 +114,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 14 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 15 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和
-`EDGE_AI_PYTHON` 时额外运行六图对照和对照守卫测试，共 16 个。本次验证
-16/16 通过。
+`EDGE_AI_PYTHON` 时额外运行六图对照和对照守卫测试，共 17 个。本次验证
+17/17 通过。
 
 `cli_inference_failures` 覆盖：
 
@@ -128,7 +128,8 @@ ctest --test-dir build --output-on-failure
 - 图片无法读取（需要真实模型）。
 
 单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、非有限输出、
-输出尺寸错误、未知类别 `Unknown`+anomaly、契约校验和类别 metadata 解析。
+类别分数越界（>1/<0）与边界 0/1、输出尺寸错误、未知类别 `Unknown`+anomaly、
+契约校验和类别 metadata 解析。
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
 指向模型、图片或彼此（含相对路径/符号链接/硬链接）时被拒绝，且原文件 SHA256
@@ -222,7 +223,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 16
+100% tests passed, 0 tests failed out of 17
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45

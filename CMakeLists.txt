@@ -141,6 +141,7 @@ if(BUILD_TESTING)
             postprocess_nms_cross_class
             postprocess_coordinate_restore
             postprocess_nonfinite
+            postprocess_score_range
             postprocess_shape_mismatch
             class_mapping_unknown
             contract_validation

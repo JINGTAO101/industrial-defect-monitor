@@ -206,6 +206,67 @@ bool testPostprocessNonFinite(std::string& error)
            expect(result.detections.empty(), "non-finite output produced detections", error);
 }
 
+bool testPostprocessScoreRange(std::string& error)
+{
+    {
+        std::vector<float> output = emptyOutput();
+        setPrediction(output, 0, 100, 100, 50, 50, 0, 1.5f);
+        const edge_ai::PostprocessResult result = edge_ai::postprocess(
+            output, validContract().class_names, identityLetterbox(),
+            edge_ai::PostprocessOptions{});
+        if (!expect(!result.error.empty(),
+                    "score > 1 was not rejected", error) ||
+            !expect(result.error.find("score") != std::string::npos &&
+                        result.error.find("range") != std::string::npos,
+                    "score > 1 error is not diagnostic: " + result.error, error) ||
+            !expect(result.detections.empty(),
+                    "score > 1 produced a detection", error)) {
+            return false;
+        }
+    }
+    {
+        std::vector<float> output = emptyOutput();
+        setPrediction(output, 0, 100, 100, 50, 50, 0, -0.1f);
+        const edge_ai::PostprocessResult result = edge_ai::postprocess(
+            output, validContract().class_names, identityLetterbox(),
+            edge_ai::PostprocessOptions{});
+        if (!expect(!result.error.empty(),
+                    "negative score was not rejected", error) ||
+            !expect(result.detections.empty(),
+                    "negative score produced a detection", error)) {
+            return false;
+        }
+    }
+    {
+        std::vector<float> output = emptyOutput();
+        setPrediction(output, 0, 100, 100, 50, 50, 0, 1.0f);
+        const edge_ai::PostprocessResult result = edge_ai::postprocess(
+            output, validContract().class_names, identityLetterbox(),
+            edge_ai::PostprocessOptions{});
+        if (!expect(result.error.empty(),
+                    "score 1.0 boundary was rejected: " + result.error, error) ||
+            !expect(result.detections.size() == 1,
+                    "score 1.0 boundary should produce one detection", error)) {
+            return false;
+        }
+    }
+    {
+        std::vector<float> output = emptyOutput();
+        setPrediction(output, 0, 100, 100, 50, 50, 0, 0.0f);
+        const edge_ai::PostprocessResult result = edge_ai::postprocess(
+            output, validContract().class_names, identityLetterbox(),
+            edge_ai::PostprocessOptions{});
+        if (!expect(result.error.empty(),
+                    "score 0.0 boundary was rejected: " + result.error, error) ||
+            !expect(result.detections.empty(),
+                    "score 0.0 boundary should be below the confidence threshold",
+                    error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool testPostprocessShapeMismatch(std::string& error)
 {
     const std::vector<float> output(100, 0.0f);
@@ -322,6 +383,7 @@ int main(int argc, char* argv[])
         {"postprocess_nms_cross_class", testPostprocessNmsCrossClass},
         {"postprocess_coordinate_restore", testPostprocessCoordinateRestore},
         {"postprocess_nonfinite", testPostprocessNonFinite},
+        {"postprocess_score_range", testPostprocessScoreRange},
         {"postprocess_shape_mismatch", testPostprocessShapeMismatch},
         {"class_mapping_unknown", testClassMappingUnknown},
         {"contract_validation", testContractValidation},

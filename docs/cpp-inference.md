@@ -208,6 +208,9 @@ B=G=R），所以本数据集上 BGR/RGB 无法区分。对真正的彩色输入
   像素），后 6 个是 Sigmoid 类别分数。
 - `confidence = max(scores)`，`class_id = argmax(scores)`；严格 `> conf`
   筛选；无 objectness。
+- 类别分数必须是模型的 Sigmoid 概率 `[0, 1]`。任何 NaN/Inf 或超出此范围的
+  值都会返回明确错误，且不产生任何检测；边界值 0 和 1 是合法的（0 通常低于
+  置信度阈值，1 可以正常产生检测）。
 - `cxcywh → xyxy` 后减去 padding、除以 ratio，再裁剪到原图尺寸。
 - 按类别分别做 NMS（`cv::dnn::NMSBoxes`，IoU=0.45），类别 ID 升序、
   组内按分数降序。NMS 不在 ONNX 图内。
@@ -271,7 +274,7 @@ SUMMARY: images=6 failures=0 max_conf_diff=1.192e-06 max_bbox_diff=3.436e-05 max
 ctest --test-dir build --output-on-failure
 ```
 
-本次配置（提供真实模型和图片路径）共 16 个测试全部通过：
+本次配置（提供真实模型和图片路径）共 17 个测试全部通过：
 
 | 测试 | 内容 |
 | --- | --- |
@@ -281,6 +284,7 @@ ctest --test-dir build --output-on-failure
 | `unit_postprocess_nms_cross_class` | 不同类别重叠框不被互相抑制 |
 | `unit_postprocess_coordinate_restore` | pad/ratio 坐标还原 |
 | `unit_postprocess_nonfinite` | NaN 输出被拒绝并给出诊断 |
+| `unit_postprocess_score_range` | 分数 >1/<0 被拒绝；边界 0/1 合法 |
 | `unit_postprocess_shape_mismatch` | 输出尺寸错误被拒绝 |
 | `unit_class_mapping_unknown` | 未知 ID → `Unknown` + anomaly |
 | `unit_contract_validation` | 名称/形状/类型/数量/类别不匹配诊断 |
@@ -293,7 +297,7 @@ ctest --test-dir build --output-on-failure
 | `cpp_reference_rejects_incomplete_inputs` | 只有一张图时必须失败；阈值不一致时必须失败（可选配置） |
 
 不提供 `EDGE_AI_MODEL_PATH` 等变量时，两个 `cpp_reference_*` 测试不会注册；
-其余 14 个测试仍可运行。失败路径的原始输出见第 4 节。
+其余 15 个测试仍可运行。失败路径的原始输出见第 4 节。
 
 测试夹具：
 
@@ -320,7 +324,7 @@ ctest --test-dir build --output-on-failure
 7. **性能**：未设置性能目标，也未做系统基准；仅记录功能验证。
 8. **未包含**：摄像头、多线程、SQLite、MQTT。
 9. **可选集成测试**：需要外部模型、六张测试图和 Python venv；这些资产不提交，
-   干净克隆只能默认运行 14 个不依赖真实模型的测试。
+   干净克隆只能默认运行 15 个不依赖真实模型的测试。
 
 ## 10. 相关文件
 

@@ -100,6 +100,22 @@ PostprocessResult postprocess(
         }
     }
 
+    // The verified model emits Sigmoid class probabilities; values outside
+    // [0, 1] indicate a broken/incompatible model and must not become
+    // detections.
+    for (std::size_t i = 0; i < static_cast<std::size_t>(kNumPredictions); ++i) {
+        for (std::size_t c = 0; c < class_names.size(); ++c) {
+            const float score = output[(4 + c) * kNumPredictions + i];
+            if (score < 0.0f || score > 1.0f) {
+                std::ostringstream message;
+                message << "class score out of range [0, 1] at prediction "
+                        << i << ", class " << c << ": " << score;
+                result.error = message.str();
+                return result;
+            }
+        }
+    }
+
     if (!(options.conf_threshold > 0.0f && options.conf_threshold <= 1.0f)) {
         result.error = "confidence threshold must be in (0, 1]";
         return result;
