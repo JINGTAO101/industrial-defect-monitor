@@ -19,10 +19,11 @@ C++17 工程骨架，包含可执行文件 `edge_ai` 的基础命令行接口与
 | GDB | 15.1 |
 | Git | 2.43.0 |
 | Ninja | 1.11.1 |
-| OpenCV | 本机尚未安装；当前代码不链接 OpenCV，安装方式见下 |
+| OpenCV | 4.6.0（libopencv-dev 4.6.0+dfsg-13.1ubuntu1，Ubuntu 24.04 官方源） |
 
-> OpenCV 在本阶段被 CMake 以可选依赖方式探测，不参与编译。摄像头与图像
-> 预处理模块接入时需要安装 OpenCV 4.x（Ubuntu 24.04 官方源版本为 4.6.0）。
+> OpenCV 在本阶段由 CMake 以可选依赖方式探测，尚未链接进 `edge_ai`；已通过
+> 独立的 C++17 编译/链接测试确认 4.6.0 可用。摄像头与图像预处理模块接入时
+> 再正式链接。
 
 ## 依赖
 
@@ -120,7 +121,7 @@ CTest 中的 `cli_behavior` 测试会真实执行 `edge_ai`，检查：
 
 ```text
 $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
--- OpenCV not found (optional at this stage)
+-- OpenCV found: 4.6.0 (optional at this stage)
 -- Configuring done
 -- Generating done
 
@@ -148,4 +149,7 @@ Try 'edge_ai --help' for more information.
 $ ctest --test-dir build --output-on-failure
 1/1 Test #1: cli_behavior .....................   Passed
 100% tests passed, 0 tests failed out of 1
+
+$ pkg-config --modversion opencv4
+4.6.0
 ```
