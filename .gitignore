@@ -1,0 +1,37 @@
+# Build output
+/build/
+/build*/
+cmake-build-*/
+install/
+compile_commands.json
+
+# Object / library / binary artifacts
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.exe
+
+# CMake / IDE local files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+*.user
+.vscode/settings.json
+
+# Logs and local environment
+*.log
+.env
+.env.*
+
+# Model weights / engines must be obtained explicitly and are never committed
+models/
+*.onnx
+*.engine
+*.pt
+*.pth
+*.weights
+*.tflite
