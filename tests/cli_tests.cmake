@@ -43,7 +43,32 @@ if(NOT bad_err MATCHES "--help")
     message(FATAL_ERROR "unknown option stderr does not point at '--help'; got: ${bad_err}")
 endif()
 
-# 3. Unexpected positional argument must also exit non-zero.
+# 3. An invalid option must take precedence over --help/--version, regardless
+#    of the order in which the arguments appear.
+function(expect_invalid_overrides_flag)
+    execute_process(
+        COMMAND "${BIN}" ${ARGN}
+        RESULT_VARIABLE rc
+        OUTPUT_VARIABLE out
+        ERROR_VARIABLE err
+    )
+    if(rc EQUAL 0)
+        message(FATAL_ERROR "expected non-zero exit for arguments '${ARGN}', got 0")
+    endif()
+    if(NOT err MATCHES "unknown option")
+        message(FATAL_ERROR "arguments '${ARGN}': stderr missing 'unknown option'; got: ${err}")
+    endif()
+    if(NOT out STREQUAL "")
+        message(FATAL_ERROR "arguments '${ARGN}': expected empty stdout, got: ${out}")
+    endif()
+endfunction()
+
+expect_invalid_overrides_flag(--help --bogus)
+expect_invalid_overrides_flag(--version --bogus)
+expect_invalid_overrides_flag(--bogus --help)
+expect_invalid_overrides_flag(--bogus --version)
+
+# 4. Unexpected positional argument must also exit non-zero.
 execute_process(
     COMMAND "${BIN}" unexpected-positional
     RESULT_VARIABLE pos_rc
@@ -57,7 +82,7 @@ if(NOT pos_err MATCHES "unexpected argument")
     message(FATAL_ERROR "positional-argument stderr is missing 'unexpected argument'; got: ${pos_err}")
 endif()
 
-# 4. No arguments must exit 0 and print the startup banner.
+# 5. No arguments must exit 0 and print the startup banner.
 execute_process(
     COMMAND "${BIN}"
     RESULT_VARIABLE default_rc

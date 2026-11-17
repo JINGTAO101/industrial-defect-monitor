@@ -82,8 +82,10 @@ cmake --build build
 ./build/bin/edge_ai --bogus
 ```
 
-`--help` / `-h` 退出码为 0；未知选项或多余位置参数会输出明确错误并返回
-退出码 2。
+程序会先完整校验所有参数，再决定是否输出版本或帮助。因此 `--help --bogus`
+和 `--version --bogus` 不会被当作成功调用：未知选项或多余位置参数会输出
+明确错误并返回退出码 2；只有全部参数合法时，`--help` / `-h` 才以退出码 0
+结束。
 
 ## 测试
 
@@ -95,8 +97,10 @@ CTest 中的 `cli_behavior` 测试会真实执行 `edge_ai`，检查：
 
 1. `--help` 退出码为 0，且输出包含用法说明；
 2. 未知选项退出码非 0，stderr 包含错误原因与 `--help` 提示；
-3. 多余位置参数退出码非 0；
-4. 无参数运行时退出码为 0，并打印启动横幅。
+3. 非法参数优先于帮助/版本标志：`--help --bogus`、`--version --bogus`
+   以及反序写法均退出非 0，stdout 为空；
+4. 多余位置参数退出码非 0；
+5. 无参数运行时退出码为 0，并打印启动横幅。
 
 ## 目录结构
 
@@ -145,6 +149,16 @@ $ ./build/bin/edge_ai --bogus
 edge_ai: unknown option '--bogus'
 Try 'edge_ai --help' for more information.
 # exit code: 2
+
+$ ./build/bin/edge_ai --help --bogus
+edge_ai: unknown option '--bogus'
+Try 'edge_ai --help' for more information.
+# exit code: 2 (help output is suppressed)
+
+$ ./build/bin/edge_ai --version --bogus
+edge_ai: unknown option '--bogus'
+Try 'edge_ai --help' for more information.
+# exit code: 2 (version output is suppressed)
 
 $ ctest --test-dir build --output-on-failure
 1/1 Test #1: cli_behavior .....................   Passed

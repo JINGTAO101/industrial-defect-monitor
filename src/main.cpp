@@ -37,24 +37,33 @@ int printError(const std::string& message)
 
 int main(int argc, char* argv[])
 {
+    bool show_help = false;
+    bool show_version = false;
+
+    // Validate every argument before acting on --help/--version, so that an
+    // invalid argument is never silently ignored (e.g. "edge_ai --help --bogus").
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
 
         if (arg == "-h" || arg == "--help") {
-            printUsage(std::cout);
-            return 0;
-        }
-
-        if (arg == "-V" || arg == "--version") {
-            std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
-            return 0;
-        }
-
-        if (!arg.empty() && arg.front() == '-') {
+            show_help = true;
+        } else if (arg == "-V" || arg == "--version") {
+            show_version = true;
+        } else if (!arg.empty() && arg.front() == '-') {
             return printError("unknown option '" + std::string(arg) + "'");
+        } else {
+            return printError("unexpected argument '" + std::string(arg) + "'");
         }
+    }
 
-        return printError("unexpected argument '" + std::string(arg) + "'");
+    if (show_help) {
+        printUsage(std::cout);
+        return 0;
+    }
+
+    if (show_version) {
+        std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
+        return 0;
     }
 
     std::cout << "====================================\n";
