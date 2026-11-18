@@ -24,7 +24,9 @@ struct PipelineOptions {
     std::size_t result_queue_capacity = 4;
     // Invoked just before the corresponding producer blocks on a full queue.
     std::function<void()> input_producer_wait_hook;
+    std::function<void()> input_producer_wake_hook;
     std::function<void()> result_producer_wait_hook;
+    std::function<void()> result_producer_wake_hook;
     // Optional injection point for thread-start failure tests.
     ThreadFactory thread_factory;
 };

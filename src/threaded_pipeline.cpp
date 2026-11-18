@@ -56,9 +56,17 @@ bool ThreadedPipeline::run(
         input_queue.setProducerWaitCallback(
             pipeline_options_.input_producer_wait_hook);
     }
+    if (pipeline_options_.input_producer_wake_hook) {
+        input_queue.setProducerWakeCallback(
+            pipeline_options_.input_producer_wake_hook);
+    }
     if (pipeline_options_.result_producer_wait_hook) {
         result_queue.setProducerWaitCallback(
             pipeline_options_.result_producer_wait_hook);
+    }
+    if (pipeline_options_.result_producer_wake_hook) {
+        result_queue.setProducerWakeCallback(
+            pipeline_options_.result_producer_wake_hook);
     }
 
     std::atomic<bool> stop{false};

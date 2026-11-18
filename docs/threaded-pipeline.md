@@ -62,7 +62,7 @@ result BoundedQueue<FrameResult> (单生产者 / 单消费者)
 实际输出（线程标识为本次运行值）：
 
 ```text
-threads: reader=139278713976448 inference=139278705583744 result=139278697191040
+threads: reader=125537458542208 inference=125537450149504 result=125537441756800
 queues: input capacity=1 max_depth=1 producer_waits=4 consumer_waits=1;
         result capacity=1 max_depth=1 producer_waits=0 consumer_waits=7
 summary: total=6 ok=0 ng=6 errors=0 skipped_unsupported=0
@@ -81,8 +81,8 @@ max_conf_diff=1.192e-06 max_bbox_diff=3.436e-05
 ### 场景 2：容量 1 受控积压
 
 `threaded_full_backpressure` 使用两个容量 1 队列。结果回调在收到第一条结果
-后暂停；测试通过输入/结果队列的生产者等待钩子确认两个生产者都已进入等待，
-再放行回调，确保积压确实发生：
+后暂停；测试通过队列的进入/退出等待钩子跟踪实时状态，确认两个生产者
+**当前同时**处于等待（不是依赖可能已失效的首次等待信号），再放行回调：
 
 ```text
 backpressure: threads(reader=..., inference=..., result=...)
@@ -96,8 +96,8 @@ counts(total=5 ok=5 ng=0 errors=0)
 
 ### 场景 3：下游致命错误唤醒退出
 
-`threaded_fatal_wakes` 先暂停结果回调，并通过两个队列的等待钩子确认读取和
-推理线程都已阻塞，再注入失败（返回 `false`）：
+`threaded_fatal_wakes` 先暂停结果回调，并通过两个队列的实时等待状态确认
+读取和推理线程**此刻同时**阻塞，再注入失败（返回 `false`）：
 
 ```text
 fatal exit: threads(reader=..., inference=..., result=...)

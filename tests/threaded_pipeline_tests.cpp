@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <future>
 #include <functional>
@@ -63,32 +64,54 @@ private:
     int next_ = 0;
 };
 
-struct ProducerWaitSignals {
-    std::atomic<bool> input_seen{false};
-    std::atomic<bool> result_seen{false};
-    std::promise<void> input_waiting;
-    std::promise<void> result_waiting;
-    std::future<void> input_future = input_waiting.get_future();
-    std::future<void> result_future = result_waiting.get_future();
+struct ProducerWaitState {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool input_waiting = false;
+    bool result_waiting = false;
 
-    std::function<void()> input_callback()
+    std::function<void()> input_start()
     {
         return [this] {
-            bool expected = false;
-            if (input_seen.compare_exchange_strong(expected, true)) {
-                input_waiting.set_value();
-            }
+            std::lock_guard<std::mutex> lock(mutex);
+            input_waiting = true;
+            condition.notify_all();
         };
     }
 
-    std::function<void()> result_callback()
+    std::function<void()> input_end()
     {
         return [this] {
-            bool expected = false;
-            if (result_seen.compare_exchange_strong(expected, true)) {
-                result_waiting.set_value();
-            }
+            std::lock_guard<std::mutex> lock(mutex);
+            input_waiting = false;
+            condition.notify_all();
         };
+    }
+
+    std::function<void()> result_start()
+    {
+        return [this] {
+            std::lock_guard<std::mutex> lock(mutex);
+            result_waiting = true;
+            condition.notify_all();
+        };
+    }
+
+    std::function<void()> result_end()
+    {
+        return [this] {
+            std::lock_guard<std::mutex> lock(mutex);
+            result_waiting = false;
+            condition.notify_all();
+        };
+    }
+
+    bool wait_both(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        return condition.wait_for(lock, timeout, [this] {
+            return input_waiting && result_waiting;
+        });
     }
 };
 
@@ -181,14 +204,14 @@ bool testFullBackpressure(std::string& error)
     }
 
     SequenceSource source(5);
-    ProducerWaitSignals wait_signals;
+    ProducerWaitState wait_state;
     edge_ai::PipelineOptions pipeline_options;
     pipeline_options.input_queue_capacity = 1;
     pipeline_options.result_queue_capacity = 1;
-    pipeline_options.input_producer_wait_hook =
-        wait_signals.input_callback();
-    pipeline_options.result_producer_wait_hook =
-        wait_signals.result_callback();
+    pipeline_options.input_producer_wait_hook = wait_state.input_start();
+    pipeline_options.input_producer_wake_hook = wait_state.input_end();
+    pipeline_options.result_producer_wait_hook = wait_state.result_start();
+    pipeline_options.result_producer_wake_hook = wait_state.result_end();
     edge_ai::ThreadedPipeline pipeline(
         source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
 
@@ -219,10 +242,7 @@ bool testFullBackpressure(std::string& error)
     });
 
     if (first_future.wait_for(2000ms) != std::future_status::ready ||
-        wait_signals.input_future.wait_for(2000ms) !=
-            std::future_status::ready ||
-        wait_signals.result_future.wait_for(2000ms) !=
-            std::future_status::ready) {
+        !wait_state.wait_both(2000ms)) {
         timed_out = true;
         release_result.set_value();
     } else {
@@ -232,7 +252,7 @@ bool testFullBackpressure(std::string& error)
 
     if (timed_out) {
         return expect(false,
-                      "pipeline did not block both producers before release",
+                      "pipeline did not have both producers waiting before release",
                       error);
     }
     if (!expect(run_ok, "backpressure pipeline failed: " + fatal_error, error) ||
@@ -287,14 +307,14 @@ bool testFatalWakesWaiters(std::string& error)
     }
 
     SequenceSource source(10);
-    ProducerWaitSignals wait_signals;
+    ProducerWaitState wait_state;
     edge_ai::PipelineOptions pipeline_options;
     pipeline_options.input_queue_capacity = 1;
     pipeline_options.result_queue_capacity = 1;
-    pipeline_options.input_producer_wait_hook =
-        wait_signals.input_callback();
-    pipeline_options.result_producer_wait_hook =
-        wait_signals.result_callback();
+    pipeline_options.input_producer_wait_hook = wait_state.input_start();
+    pipeline_options.input_producer_wake_hook = wait_state.input_end();
+    pipeline_options.result_producer_wait_hook = wait_state.result_start();
+    pipeline_options.result_producer_wake_hook = wait_state.result_end();
     edge_ai::ThreadedPipeline pipeline(
         source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
 
@@ -325,10 +345,7 @@ bool testFatalWakesWaiters(std::string& error)
     });
 
     if (first_future.wait_for(2000ms) != std::future_status::ready ||
-        wait_signals.input_future.wait_for(2000ms) !=
-            std::future_status::ready ||
-        wait_signals.result_future.wait_for(2000ms) !=
-            std::future_status::ready) {
+        !wait_state.wait_both(2000ms)) {
         timed_out = true;
         fail_result.set_value();
     } else {
@@ -338,7 +355,7 @@ bool testFatalWakesWaiters(std::string& error)
 
     if (timed_out) {
         return expect(false,
-                      "pipeline did not block both producers before the fatal error",
+                      "pipeline did not have both producers waiting before the fatal error",
                       error);
     }
     if (!expect(!run_ok, "fatal callback did not fail the pipeline", error) ||

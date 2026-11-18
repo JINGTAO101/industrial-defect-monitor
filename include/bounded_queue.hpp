@@ -55,6 +55,13 @@ public:
         producer_wait_callback_ = std::move(callback);
     }
 
+    // Invoked after a blocked producer wakes (for live wait-state tracking).
+    void setProducerWakeCallback(std::function<void()> callback)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        producer_wake_callback_ = std::move(callback);
+    }
+
     // As above, but for consumers about to block on an empty queue.
     void setConsumerWaitCallback(std::function<void()> callback)
     {
@@ -78,6 +85,9 @@ public:
             not_full_.wait(lock, [this] {
                 return closed_ || queue_.size() < capacity_;
             });
+            if (producer_wake_callback_) {
+                producer_wake_callback_();
+            }
             if (closed_) {
                 return false;
             }
@@ -164,6 +174,7 @@ private:
     bool closed_ = false;
     QueueStats stats_;
     std::function<void()> producer_wait_callback_;
+    std::function<void()> producer_wake_callback_;
     std::function<void()> consumer_wait_callback_;
 };
 

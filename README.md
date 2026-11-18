@@ -170,8 +170,8 @@ ctest --test-dir build --output-on-failure
 
 - `threaded_normal_drain`：读取/推理/结果三线程正常排空，序号顺序与队列深度；
 - `threaded_full_backpressure`：两个容量 1 队列、受控暂停、满载等待、序号唯一；
-- `threaded_fatal_wakes`：在确认两个生产者都已等待后用同步信号注入失败，
-  验证唤醒、join 和错误返回；
+- `threaded_fatal_wakes`：用进入/退出等待钩子确认两个生产者当前同时等待后，
+  再注入失败，验证唤醒、join 和错误返回；
 - `threaded_start_failure_inference` / `threaded_start_failure_result`：
   注入第 2/3 个线程启动失败，验证已启动线程被回收且进程不终止；
 - `threaded_batch_reference`：六图真实模型批量顺序/检测结果与参考对照（可选）。
