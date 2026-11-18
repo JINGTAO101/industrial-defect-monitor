@@ -22,6 +22,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs dnn)
 find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 
 # ONNX Runtime C++ CPU 包：解压后包含 include/ 与 lib/。
 # 用法：cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.32.0 ...
@@ -152,6 +153,24 @@ if(BUILD_TESTING)
     add_test(NAME batch_source_exception COMMAND edge_ai_batch_tests)
     # A regression to the old retry-forever behavior must fail promptly.
     set_tests_properties(batch_source_exception PROPERTIES TIMEOUT 10)
+
+    add_executable(edge_ai_queue_tests
+        tests/queue_tests.cpp
+    )
+    target_include_directories(edge_ai_queue_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_link_libraries(edge_ai_queue_tests PRIVATE Threads::Threads)
+    edge_ai_enable_warnings(edge_ai_queue_tests)
+
+    foreach(queue_test
+            queue_reject_zero_capacity
+            queue_full_blocks
+            queue_empty_blocks
+            queue_close_drains
+            queue_close_wakes_waiters
+            queue_concurrent_no_loss)
+        add_test(NAME ${queue_test} COMMAND edge_ai_queue_tests ${queue_test})
+        set_tests_properties(${queue_test} PROPERTIES TIMEOUT 10)
+    endforeach()
 
     foreach(test_name
             preprocess_non_square

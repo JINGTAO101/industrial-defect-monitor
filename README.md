@@ -8,9 +8,11 @@
   包括模型契约校验、letterbox 预处理、类别感知 NMS、坐标还原、失败路径测试，
   以及与 2A 参考结果的逐项对照；
 - **任务 3**：统一 `Frame`/`ImageSource` 图片输入抽象，支持单图和目录批量，
-  实现可配置阈值与 OK/NG 判定，覆盖坏文件继续策略和输入/阈值错误测试。
+  实现可配置阈值与 OK/NG 判定，覆盖坏文件继续策略和输入/阈值错误测试；
+- **任务 4A**：可关闭的线程安全有界队列，支持阻塞生产/消费、满载等待、
+  关闭排空和并发无丢失验证；4B 再接入采集/推理/事件线程。
 
-摄像头、多线程、SQLite、MQTT 不在当前阶段范围内。
+摄像头线程化、SQLite、MQTT 不在当前阶段范围内。
 
 ## 已验证环境
 
@@ -131,10 +133,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 25 个测试（单元测试 + CLI 失败路径 + 空检测 +
-路径冲突 + 批量输入）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR`
-和 `EDGE_AI_PYTHON` 时额外运行六图对照和对照守卫测试，共 27 个。本次验证
-27/27 通过。
+不提供真实模型路径时运行 31 个测试（单元测试 + CLI 失败路径 + 空检测 +
+路径冲突 + 批量输入 + 队列）；提供 `EDGE_AI_MODEL_PATH`、
+`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照和对照
+守卫测试，共 33 个。本次验证 33/33 通过。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -153,6 +155,15 @@ ctest --test-dir build --output-on-failure
   与 `--image-dir` 组合拒绝；
 - 有真实模型时六张图批量输出 `ok=0 ng=6 errors=0`。
 
+任务 4A 新增 6 个独立队列测试：
+
+- 容量 0 拒绝；
+- 容量 2 满载阻塞、取走 A 后 C 入队、剩余顺序 B/C；
+- 空队列消费者等待并被生产者唤醒；
+- close 幂等、唤醒等待者、拒绝新入队、排空后返回 Closed；
+- 递增序号 + 慢消费者的 2000 项并发无丢失/重复；
+- 所有队列测试通过 CTest `TIMEOUT 10` 防止死锁挂起。
+
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
 指向模型、图片或彼此（含相对路径/悬空符号链接/硬链接）时被拒绝，且原文件
@@ -169,6 +180,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 ├── .gitignore
 ├── include/
 │   ├── batch_processor.hpp
+│   ├── bounded_queue.hpp
 │   ├── image_preprocess.hpp
 │   ├── image_source.hpp
 │   ├── model_contract.hpp
@@ -191,8 +203,9 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 ├── docs/
 │   ├── model-verification.md          # 2A 模型来源/许可/接口/参考推理
 │   ├── cpp-inference.md               # 2B C++ 推理与对照记录
-│   ├── cpp-inference-run.txt          # 2B 干净构建/CTest/推理/失败路径运行日志
+│   ├── cpp-inference-run.txt          # 2B/3/4A 干净构建/CTest/推理/失败路径运行日志
 │   ├── input-and-quality.md           # 任务 3 输入抽象与 OK/NG 判定
+│   ├── bounded-queue.md               # 任务 4A 队列语义与满载/并发指标
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -209,6 +222,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_path_conflict_tests.cmake
     ├── cli_batch_tests.cmake
     ├── compare_reference_guard_tests.cmake
+    ├── queue_tests.cpp
     ├── unit_tests.cpp
     └── fixtures/                      # 合成图片/契约错误 ONNX/空输出模型/损坏模型
 ```
@@ -253,6 +267,18 @@ release v1.0.0）。详细记录见 [docs/model-verification.md](docs/model-veri
   处理、汇总错误并以退出码 1 结束；
 - 真实模型六图批量结果：`ok=0 ng=6 errors=0`。
 
+## 任务 4A：有界队列
+
+实现与详细测试见 [docs/bounded-queue.md](docs/bounded-queue.md)。
+`include/bounded_queue.hpp` 提供容量可配置的阻塞队列：满时生产者等待、空时
+消费者等待、`close()` 幂等并唤醒所有等待者、关闭后拒绝新项但允许排空。
+队列测试仅使用整数序号，不依赖模型或图片。
+
+满载实测：`capacity=2 enqueued=3 dequeued=3 max_depth=2 producer_wait_count=1`。
+并发实测（本次运行）：`capacity=4 enqueued=2000 dequeued=2000 max_depth=4
+producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚未接入主程序，
+4B 再完成三线程接线。
+
 ## 验收记录（2B/3）
 
 ```text
@@ -268,7 +294,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 27
+100% tests passed, 0 tests failed out of 33
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45
