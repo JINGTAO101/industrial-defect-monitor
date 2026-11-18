@@ -139,6 +139,18 @@ if(BUILD_TESTING)
         EDGE_AI_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     edge_ai_enable_warnings(edge_ai_tests)
 
+    add_executable(edge_ai_batch_tests
+        tests/batch_processor_tests.cpp
+    )
+    target_link_libraries(edge_ai_batch_tests PRIVATE edge_ai_inference)
+    target_include_directories(edge_ai_batch_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(edge_ai_batch_tests PRIVATE
+        EDGE_AI_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    target_link_options(edge_ai_batch_tests PRIVATE
+        "-Wl,-rpath,${ONNXRUNTIME_LIB_DIR}")
+    edge_ai_enable_warnings(edge_ai_batch_tests)
+    add_test(NAME batch_source_exception COMMAND edge_ai_batch_tests)
+
     foreach(test_name
             preprocess_non_square
             postprocess_empty

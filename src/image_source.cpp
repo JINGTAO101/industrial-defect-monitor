@@ -29,7 +29,16 @@ std::string lowerExtension(const std::string& path)
 
 bool loadFrame(const std::string& path, Frame& frame, std::string& error)
 {
-    cv::Mat image = cv::imread(path, cv::IMREAD_COLOR);
+    cv::Mat image;
+    try {
+        image = cv::imread(path, cv::IMREAD_COLOR);
+    } catch (const cv::Exception& exception) {
+        error = "failed to decode image: " + path + ": " + exception.what();
+        return false;
+    } catch (const std::exception& exception) {
+        error = "failed to decode image: " + path + ": " + exception.what();
+        return false;
+    }
     if (image.empty()) {
         error = "failed to read image: " + path;
         return false;
@@ -40,6 +49,7 @@ bool loadFrame(const std::string& path, Frame& frame, std::string& error)
     }
     frame.image = std::move(image);
     frame.source = path;
+    frame.timestamp = std::chrono::system_clock::now();
     return true;
 }
 
@@ -84,8 +94,8 @@ std::vector<std::string> listSupportedImageFiles(
         return files;
     }
 
-    for (const auto& entry :
-         std::filesystem::directory_iterator(root, filesystem_error)) {
+    try {
+        std::filesystem::directory_iterator iterator(root, filesystem_error);
         if (filesystem_error) {
             if (error != nullptr) {
                 *error = "failed to enumerate image directory: " + directory +
@@ -93,16 +103,55 @@ std::vector<std::string> listSupportedImageFiles(
             }
             return {};
         }
-        std::error_code entry_error;
-        if (!entry.is_regular_file(entry_error) || entry_error) {
-            continue;
+        const std::filesystem::directory_iterator end;
+        for (; iterator != end; iterator.increment(filesystem_error)) {
+            if (filesystem_error) {
+                if (error != nullptr) {
+                    *error = "failed to enumerate image directory: " +
+                             directory + ": " + filesystem_error.message();
+                }
+                return {};
+            }
+            const auto& entry = *iterator;
+            std::error_code entry_error;
+            const bool regular = entry.is_regular_file(entry_error);
+            if (entry_error) {
+                if (error != nullptr) {
+                    *error = "failed to inspect directory entry '" +
+                             entry.path().string() + "': " +
+                             entry_error.message();
+                }
+                return {};
+            }
+            if (!regular) {
+                continue;
+            }
+            const std::string path = entry.path().string();
+            if (isSupportedImageExtension(path)) {
+                files.push_back(path);
+            } else {
+                ++skipped;
+            }
         }
-        const std::string path = entry.path().string();
-        if (isSupportedImageExtension(path)) {
-            files.push_back(path);
-        } else {
-            ++skipped;
+        if (filesystem_error) {
+            if (error != nullptr) {
+                *error = "failed to enumerate image directory: " + directory +
+                         ": " + filesystem_error.message();
+            }
+            return {};
         }
+    } catch (const std::filesystem::filesystem_error& exception) {
+        if (error != nullptr) {
+            *error = "failed to enumerate image directory: " + directory +
+                     ": " + exception.what();
+        }
+        return {};
+    } catch (const std::exception& exception) {
+        if (error != nullptr) {
+            *error = "failed to enumerate image directory: " + directory +
+                     ": " + exception.what();
+        }
+        return {};
     }
 
     std::sort(files.begin(), files.end());

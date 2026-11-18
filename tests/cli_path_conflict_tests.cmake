@@ -166,6 +166,26 @@ if(EXISTS "${DANGLING_TARGET}")
     message(FATAL_ERROR "chained dangling symlink target was created: ${DANGLING_TARGET}")
 endif()
 
+# Relative symlink target whose parent directory is itself a symlink:
+#   link -> real/sub
+#   real/sub/alias -> ../nested-result.json
+# Resolving "../" before resolving "link" would incorrectly produce
+# TEST_DIR/nested-result.json instead of TEST_DIR/real/nested-result.json.
+file(MAKE_DIRECTORY "${TEST_DIR}/real/sub")
+file(CREATE_LINK "${TEST_DIR}/real/sub" "${TEST_DIR}/link" SYMBOLIC)
+file(CREATE_LINK "../nested-result.json"
+     "${TEST_DIR}/real/sub/alias" SYMBOLIC)
+set(NESTED_TARGET "${TEST_DIR}/real/nested-result.json")
+expect_conflict(
+    "relative symlink target under symlinked parent"
+    "refer to the same file"
+    --model "${MODEL}" --image "${IMAGE}"
+    --dump-input "${TEST_DIR}/link/alias" --json-out "${NESTED_TARGET}"
+)
+if(EXISTS "${NESTED_TARGET}")
+    message(FATAL_ERROR "nested symlink target was created: ${NESTED_TARGET}")
+endif()
+
 file(SHA256 "${MODEL}" MODEL_SHA_AFTER)
 file(SHA256 "${IMAGE}" IMAGE_SHA_AFTER)
 if(NOT MODEL_SHA_BEFORE STREQUAL MODEL_SHA_AFTER)

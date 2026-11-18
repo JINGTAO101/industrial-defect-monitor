@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -487,12 +488,17 @@ bool testImageSourceSingle(std::string& error)
         return false;
     }
     edge_ai::Frame frame;
-    if (!expect(valid.next(frame, source_error) ==
-                    edge_ai::SourceStatus::Frame,
+    const auto timestamp_before = std::chrono::system_clock::now();
+    const edge_ai::SourceStatus frame_status = valid.next(frame, source_error);
+    const auto timestamp_after = std::chrono::system_clock::now();
+    if (!expect(frame_status == edge_ai::SourceStatus::Frame,
                 "valid single source did not return a frame: " + source_error,
                 error) ||
         !expect(!frame.image.empty() && frame.image.cols == 320,
                 "valid single source loaded the wrong image", error) ||
+        !expect(frame.timestamp >= timestamp_before &&
+                    frame.timestamp <= timestamp_after,
+                "single source frame has no valid read timestamp", error) ||
         !expect(valid.next(frame, source_error) == edge_ai::SourceStatus::End,
                 "valid single source did not end", error)) {
         return false;
@@ -574,13 +580,19 @@ bool testImageSourceDirectory(std::string& error)
     }
 
     edge_ai::Frame frame;
-    if (!expect(source.next(frame, source_error) ==
-                    edge_ai::SourceStatus::Frame,
+    const auto directory_timestamp_before = std::chrono::system_clock::now();
+    const edge_ai::SourceStatus directory_frame_status =
+        source.next(frame, source_error);
+    const auto directory_timestamp_after = std::chrono::system_clock::now();
+    if (!expect(directory_frame_status == edge_ai::SourceStatus::Frame,
                 "directory source did not return the valid frame: " +
                     source_error,
                 error) ||
         !expect(frame.source.find("a.png") != std::string::npos,
                 "directory source returned the wrong order", error) ||
+        !expect(frame.timestamp >= directory_timestamp_before &&
+                    frame.timestamp <= directory_timestamp_after,
+                "directory source frame has no valid read timestamp", error) ||
         !expect(source.next(frame, source_error) ==
                     edge_ai::SourceStatus::Error,
                 "directory source did not report the corrupt frame", error) ||
@@ -611,10 +623,20 @@ bool testImageSourceDirectory(std::string& error)
     std::filesystem::create_directories(empty_dir, filesystem_error);
     edge_ai::DirectoryImageSource empty(empty_dir.string(), source_error);
     std::filesystem::remove_all(empty_dir);
+    if (!expect(!source_error.empty() &&
+                    source_error.find("no supported images") !=
+                        std::string::npos,
+                "empty directory was not rejected: " + source_error, error)) {
+        return false;
+    }
+
+    edge_ai::DirectoryImageSource file_source(
+        fixturePath("non_square_320x200.png"), source_error);
     return expect(!source_error.empty() &&
-                      source_error.find("no supported images") !=
-                          std::string::npos,
-                  "empty directory was not rejected: " + source_error, error);
+                      source_error.find("not a directory") != std::string::npos,
+                  "regular file was not rejected as a directory: " +
+                      source_error,
+                  error);
 }
 
 bool testClassMetadataParser(std::string& error)

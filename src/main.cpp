@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -114,7 +115,22 @@ std::filesystem::path normalizedPath(const std::string& path)
     // dangling final symlink as the link path, so "alias -> missing.json"
     // would otherwise compare differently from "missing.json" even though
     // writing through the alias creates/overwrites that target.
+    //
+    // Resolve the parent directory FIRST. A relative target such as
+    // "../result.json" must be interpreted relative to the real parent, not a
+    // lexical path whose parent may itself be a symlink.
     for (int depth = 0; depth < 40; ++depth) {
+        const std::filesystem::path parent = absolute.parent_path();
+        const std::filesystem::path filename = absolute.filename();
+        error_code.clear();
+        std::filesystem::path resolved_parent = std::filesystem::weakly_canonical(
+            parent.empty() ? std::filesystem::path(".") : parent, error_code);
+        if (error_code) {
+            error_code.clear();
+            resolved_parent = parent;
+        }
+        absolute = resolved_parent / filename;
+
         error_code.clear();
         const std::filesystem::file_status status =
             std::filesystem::symlink_status(absolute, error_code);
@@ -129,9 +145,12 @@ std::filesystem::path normalizedPath(const std::string& path)
             break;
         }
         if (target.is_relative()) {
-            target = absolute.parent_path() / target;
+            absolute = absolute.parent_path() / target;
+        } else {
+            absolute = target;
         }
-        absolute = target.lexically_normal();
+        // Do not lexically_normal() here: the next iteration must resolve the
+        // parent (including "..") in the real filesystem namespace.
     }
 
     error_code.clear();
@@ -381,6 +400,13 @@ void writeShape(std::ostream& os, const std::vector<int64_t>& shape)
     os << "]";
 }
 
+long long timestampMillis(edge_ai::FrameTimestamp timestamp)
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               timestamp.time_since_epoch())
+        .count();
+}
+
 bool ensureParentDirectory(const std::string& path, std::string& error)
 {
     const std::filesystem::path parent =
@@ -408,6 +434,7 @@ bool writeJsonResult(
     const edge_ai::PostprocessResult& result,
     const edge_ai::QualityResult& quality,
     const std::string& image_path,
+    edge_ai::FrameTimestamp timestamp,
     std::string& error)
 {
     if (!ensureParentDirectory(path, error)) {
@@ -474,6 +501,13 @@ bool writeJsonResult(
     os << "    \"path\": \"" << jsonEscape(image_path) << "\",\n";
     os << "    \"width\": " << input.letterbox.original_width << ",\n";
     os << "    \"height\": " << input.letterbox.original_height << ",\n";
+    os << "    \"timestamp_unix_ms\": ";
+    if (timestamp == edge_ai::FrameTimestamp{}) {
+        os << "null";
+    } else {
+        os << timestampMillis(timestamp);
+    }
+    os << ",\n";
     os << "    \"letterbox\": {\n";
     os << "      \"ratio\": " << input.letterbox.ratio << ",\n";
     os << "      \"pad_left\": " << input.letterbox.pad_left << ",\n";
@@ -615,6 +649,13 @@ bool writeBatchJson(
         os << "      \"error\": \"" << jsonEscape(frame.error) << "\",\n";
         os << "      \"width\": " << frame.width << ",\n";
         os << "      \"height\": " << frame.height << ",\n";
+        os << "      \"timestamp_unix_ms\": ";
+        if (frame.timestamp == edge_ai::FrameTimestamp{}) {
+            os << "null";
+        } else {
+            os << timestampMillis(frame.timestamp);
+        }
+        os << ",\n";
         os << "      \"letterbox\": {\"ratio\": " << frame.letterbox.ratio
            << ", \"pad_left\": " << frame.letterbox.pad_left
            << ", \"pad_top\": " << frame.letterbox.pad_top << "},\n";
@@ -640,12 +681,19 @@ bool writeBatchJson(
             os << "\"" << jsonEscape(frame.anomalies[j]) << "\"";
         }
         os << "],\n";
-        os << "      \"quality\": {\"status\": \"" << status
-           << "\", \"is_ng\": " << (frame.quality.is_ng ? "true" : "false")
-           << ", \"confidence_threshold\": " << options.conf_threshold
-           << ", \"total_detections\": " << frame.quality.total_detections
-           << ", \"qualifying_defects\": " << frame.quality.defects.size()
-           << "}\n";
+        if (!frame.quality_available) {
+            // A failed frame has no quality decision. Emitting
+            // is_ng:false here could be mistaken for a completed OK result.
+            os << "      \"quality\": null\n";
+        } else {
+            os << "      \"quality\": {\"status\": \"" << status
+               << "\", \"is_ng\": "
+               << (frame.quality.is_ng ? "true" : "false")
+               << ", \"confidence_threshold\": " << options.conf_threshold
+               << ", \"total_detections\": " << frame.quality.total_detections
+               << ", \"qualifying_defects\": " << frame.quality.defects.size()
+               << "}\n";
+        }
         os << "    }";
     }
     if (!batch.frames.empty()) {
@@ -767,7 +815,7 @@ int runSingleImage(const Options& options)
     if (!options.json_out.empty() &&
         !writeJsonResult(options.json_out, info, input, min_value, max_value,
                          postprocess_options, result, quality, frame.source,
-                         error)) {
+                         frame.timestamp, error)) {
         std::cerr << kProgram << ": " << error << "\n";
         return 1;
     }

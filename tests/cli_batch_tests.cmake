@@ -49,6 +49,14 @@ foreach(expected "\"ng\": 0" "\"errors\": 0" "\"skipped_unsupported\": 0")
         message(FATAL_ERROR "valid batch JSON missing '${expected}'")
     endif()
 endforeach()
+string(FIND "${valid_json}" "\"timestamp_unix_ms\":" timestamp_pos)
+if(timestamp_pos EQUAL -1)
+    message(FATAL_ERROR "valid batch JSON has no frame timestamp")
+endif()
+string(FIND "${valid_json}" "\"timestamp_unix_ms\": null" null_timestamp_pos)
+if(NOT null_timestamp_pos EQUAL -1)
+    message(FATAL_ERROR "valid batch JSON has a null timestamp")
+endif()
 
 # 2. Mixed batch: corrupt image is reported, processing continues, exit 1,
 #    and an unsupported extension is counted as skipped.
@@ -77,6 +85,43 @@ foreach(expected "\"errors\": 1" "\"skipped_unsupported\": 1")
         message(FATAL_ERROR "mixed batch JSON missing '${expected}'")
     endif()
 endforeach()
+# The failed frame must not publish is_ng:false; only the completed OK frame
+# may contain a boolean quality decision.
+string(FIND "${mixed_json}" "\"quality\": null" null_quality_pos)
+if(null_quality_pos EQUAL -1)
+    message(FATAL_ERROR "failed frame does not set quality to null")
+endif()
+string(REGEX MATCHALL "\"is_ng\": false" mixed_false "${mixed_json}")
+list(LENGTH mixed_false mixed_false_count)
+if(NOT mixed_false_count EQUAL 1)
+    message(FATAL_ERROR
+        "expected exactly one completed OK frame with is_ng:false, got ${mixed_false_count}")
+endif()
+
+# 3. A batch containing only a corrupt image must expose quality:null and no
+#    is_ng boolean at all.
+file(MAKE_DIRECTORY "${TEST_DIR}/bad-only")
+file(WRITE "${TEST_DIR}/bad-only/bad.jpg" "not an image")
+execute_process(
+    COMMAND "${BIN}" --model "${FIXTURES}/zero_output.onnx"
+        --image-dir "${TEST_DIR}/bad-only"
+        --json-out "${TEST_DIR}/bad-only.json"
+    RESULT_VARIABLE bad_only_rc
+    OUTPUT_VARIABLE bad_only_out
+    ERROR_VARIABLE bad_only_err
+)
+if(bad_only_rc EQUAL 0)
+    message(FATAL_ERROR "bad-only batch must exit non-zero")
+endif()
+file(READ "${TEST_DIR}/bad-only.json" bad_only_json)
+string(FIND "${bad_only_json}" "\"quality\": null" bad_null_pos)
+if(bad_null_pos EQUAL -1)
+    message(FATAL_ERROR "bad-only batch does not set quality to null")
+endif()
+string(FIND "${bad_only_json}" "\"is_ng\"" bad_is_ng_pos)
+if(NOT bad_is_ng_pos EQUAL -1)
+    message(FATAL_ERROR "bad-only batch published an is_ng boolean for a failed frame")
+endif()
 
 # 3. --json-out must not overwrite a batch input image.
 file(SHA256 "${TEST_DIR}/valid/valid.png" conflict_sha_before)

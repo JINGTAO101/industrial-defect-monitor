@@ -151,9 +151,11 @@ edge_ai: output paths '.../same-output.bin' and '.../same-output.bin' refer to t
 ```
 
 `cli_path_conflicts` 覆盖相对路径、`..`、符号链接、硬链接，以及
-`alias -> 尚不存在的 result.json`（包括符号链接链）这种悬空链接场景；测试
-确认程序拒绝组合、目标文件没有被创建，并在测试后比较模型/图片的 SHA256，
-确认原文件未被修改。
+`alias -> 尚不存在的 result.json`（包括符号链接链）这种悬空链接场景；还覆盖
+“父目录是符号链接 + 相对目标”的情况（`link -> real/sub`、
+`real/sub/alias -> ../result.json`），确保先解析父目录再处理 `..`。测试确认
+程序拒绝组合、目标文件没有被创建，并在测试后比较模型/图片的 SHA256，确认
+原文件未被修改。
 
 前两条和契约错误使用仓库内合成夹具
 `tests/fixtures/{corrupt_model.bin,wrong_input.onnx,wrong_output.onnx}`；图片
@@ -276,7 +278,7 @@ SUMMARY: images=6 failures=0 max_conf_diff=1.192e-06 max_bbox_diff=3.436e-05 max
 ctest --test-dir build --output-on-failure
 ```
 
-本次配置（提供真实模型和图片路径）共 26 个测试全部通过：
+本次配置（提供真实模型和图片路径）共 27 个测试全部通过：
 
 | 测试 | 内容 |
 | --- | --- |
@@ -299,7 +301,7 @@ ctest --test-dir build --output-on-failure
 | `cpp_reference_rejects_incomplete_inputs` | 只有一张图时必须失败；阈值不一致时必须失败（可选配置） |
 
 不提供 `EDGE_AI_MODEL_PATH` 等变量时，两个 `cpp_reference_*` 测试不会注册；
-其余 24 个测试仍可运行。失败路径的原始输出见第 4 节。任务 3 新增的质量判定、图片源和批量测试见
+其余 25 个测试仍可运行。失败路径的原始输出见第 4 节。任务 3 新增的质量判定、图片源和批量测试见
 `docs/input-and-quality.md`。
 
 测试夹具：
@@ -327,7 +329,7 @@ ctest --test-dir build --output-on-failure
 7. **性能**：未设置性能目标，也未做系统基准；仅记录功能验证。
 8. **未包含**：摄像头、多线程、SQLite、MQTT。
 9. **可选集成测试**：需要外部模型、六张测试图和 Python venv；这些资产不提交，
-   干净克隆只能默认运行 24 个不依赖真实模型的测试。
+   干净克隆只能默认运行 25 个不依赖真实模型的测试。
 
 ## 10. 相关文件
 

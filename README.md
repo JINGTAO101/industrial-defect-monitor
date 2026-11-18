@@ -129,10 +129,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 24 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 25 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR`
-和 `EDGE_AI_PYTHON` 时额外运行六图对照和对照守卫测试，共 26 个。本次验证
-26/26 通过。
+和 `EDGE_AI_PYTHON` 时额外运行六图对照和对照守卫测试，共 27 个。本次验证
+27/27 通过。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -263,7 +263,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 26
+100% tests passed, 0 tests failed out of 27
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45

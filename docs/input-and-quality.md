@@ -13,10 +13,13 @@
 `include/image_source.hpp`：
 
 ```cpp
+using FrameTimestamp = std::chrono::system_clock::time_point;
+
 struct Frame {
     cv::Mat image;       // 成功加载后的 BGR 8UC3 图像
     std::string source;  // 文件路径
     std::size_t index;   // 输入序号
+    FrameTimestamp timestamp;  // 成功解码时的墙钟时间
 };
 ```
 
@@ -39,6 +42,11 @@ public:
 | `SingleImageSource` | 单张图片 | 构造时检查存在性、普通文件、扩展名；`next` 加载一次后返回 `End` |
 | `DirectoryImageSource` | 目录批量 | 字典序枚举支持扩展名的普通文件；逐个加载，坏文件返回 `Error`，下一次调用继续 |
 
+`timestamp` 使用 `std::chrono::system_clock`，语义为“该图片成功解码、进入
+软件处理边界时的墙钟时间”，不是 EXIF 拍摄时间。单图和批量源都会在成功
+加载时填充；失败帧没有可交付的 `Frame`。宽、高、通道数不重复存放，调用方
+使用 `frame.image.cols`、`rows`、`channels()` 获取。
+
 `BatchProcessor`（`include/batch_processor.hpp`）只接收 `ImageSource&` 和
 `ModelRunner&`，因此推理/批处理代码不依赖 `SingleImageSource` 或
 `DirectoryImageSource` 的具体实现。
@@ -55,6 +63,7 @@ public:
 | 路径不存在 | 构造 `SingleImageSource` 失败，stderr 报 `image file not found: ...`，退出码 1 |
 | 扩展名不支持 | 报 `unsupported image extension: ...`，退出码 1 |
 | OpenCV 无法解码（损坏） | `next` 返回 `Error`，报 `failed to read image: ...`，退出码 1 |
+| 解码过程抛出 C++/OpenCV 异常 | 在图片源内捕获并转为 `Error`，不终止进程 |
 | 正常 | 返回一个 `Frame`，继续预处理/推理 |
 
 ### 批量目录
@@ -62,6 +71,8 @@ public:
 - 只枚举支持扩展名的普通文件，按路径字典序处理；其他文件（如 `.xml`、
   `.txt`）被跳过，并在 `skippedUnsupported()` / 批量摘要中计数。
 - 目录不存在、不是目录或没有支持图片：明确报错，退出码 1。
+- 目录迭代初始化/递增失败或条目元数据读取失败：报明确目录枚举错误，不会
+  误报为“没有支持的图片”。
 - 单个文件损坏：记录该帧 `[ERROR]`，**继续处理后续文件**；最终退出码为 1。
 - 所有文件处理成功（包括 OK 和 NG）：退出码 0。
 - 默认策略是“继续并汇报”，不是 fail-fast；这一行为已写入 README 和测试。
@@ -89,6 +100,10 @@ struct QualityResult {
     std::vector<Detection> defects;  // confidence > threshold
 };
 ```
+
+批处理结果中的 `FrameResult` 还有 `quality_available` 标志：只有完成推理和
+判定的帧才为 `true`；坏图/推理失败的帧为 `false`，其 `quality` 不应被读取。
+批量 JSON 对应输出 `quality: null`。
 
 判定规则：
 
@@ -164,12 +179,13 @@ ctest --test-dir build --output-on-failure
 | `unit_quality_boundary` | 恰好等于阈值 → OK（严格 `>`） |
 | `unit_quality_invalid_threshold` | 0、负数、>1、NaN、Inf → 明确错误 |
 | `unit_image_source_single` | 单图正常/缺失/不支持/损坏 |
-| `unit_image_source_directory` | 批量正常、坏文件继续、扩展名跳过、缺失/空目录 |
-| `cli_batch` | 全 OK、坏文件继续、跳过不支持文件、批量 JSON、输出路径冲突、`--dump-input` 拒绝；有真实模型时验证六图全 NG |
+| `unit_image_source_directory` | 批量正常、坏文件继续、扩展名跳过、缺失/空目录、读取时间戳 |
+| `batch_source_exception` | 图片源抛异常时批处理记录错误并继续下一帧 |
+| `cli_batch` | 全 OK、坏文件继续、跳过不支持文件、批量 JSON（失败帧 `quality: null`）、输出路径冲突、`--dump-input` 拒绝；有真实模型时验证六图全 NG |
 | `cli_behavior` | 单图缺失/不支持/损坏、非法阈值、单图 OK |
 
-本次配置（真实模型 + 六张图片）**26/26 通过**；不提供真实模型/图片时，
-24 个不依赖外部资产的测试通过。完整运行记录见
+本次配置（真实模型 + 六张图片）**27/27 通过**；不提供真实模型/图片时，
+25 个不依赖外部资产的测试通过。完整运行记录见
 `docs/cpp-inference-run.txt`。
 
 ## 6. 待确认 / 限制

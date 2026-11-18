@@ -24,13 +24,28 @@ bool processFrames(
     while (true) {
         Frame frame;
         std::string error;
-        const SourceStatus status = source.next(frame, error);
+        SourceStatus status = SourceStatus::End;
+        try {
+            status = source.next(frame, error);
+        } catch (const std::exception& exception) {
+            FrameResult frame_result;
+            frame_result.source =
+                frame.source.empty() ? "<unknown source>" : frame.source;
+            frame_result.timestamp = frame.timestamp;
+            frame_result.error =
+                std::string("image source exception: ") + exception.what();
+            result.frames.push_back(std::move(frame_result));
+            ++result.error_count;
+            continue;
+        }
         if (status == SourceStatus::End) {
             break;
         }
 
         FrameResult frame_result;
-        frame_result.source = frame.source;
+        frame_result.source =
+            frame.source.empty() ? "<unknown source>" : frame.source;
+        frame_result.timestamp = frame.timestamp;
         if (status == SourceStatus::Error) {
             frame_result.error = error;
             result.frames.push_back(std::move(frame_result));
@@ -57,6 +72,7 @@ bool processFrames(
                     frame_result.inference_ok = true;
                     frame_result.detections = postprocessed.detections;
                     frame_result.anomalies = postprocessed.anomalies;
+                    frame_result.quality_available = true;
                     frame_result.quality = quality;
                 }
             }

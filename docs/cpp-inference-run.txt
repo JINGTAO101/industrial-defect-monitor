@@ -21,84 +21,88 @@ $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$O
 -- Build files have been written to: $REPO_ROOT/build
 
 $ cmake --build build
-[1/16] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
-[2/16] Linking CXX static library libsystem_info.a
-[3/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
-[4/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/quality.cpp.o
-[5/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
-[6/16] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
-[7/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_source.cpp.o
-[8/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
-[9/16] Linking CXX static library libedge_ai_core.a
-[10/16] Building CXX object CMakeFiles/edge_ai_inference.dir/src/batch_processor.cpp.o
-[11/16] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
-[12/16] Linking CXX static library libedge_ai_inference.a
-[13/16] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
-[14/16] Linking CXX executable bin/edge_ai
-[15/16] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
-[16/16] Linking CXX executable bin/edge_ai_tests
+[1/18] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
+[2/18] Linking CXX static library libsystem_info.a
+[3/18] Building CXX object CMakeFiles/edge_ai_core.dir/src/quality.cpp.o
+[4/18] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
+[5/18] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
+[6/18] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
+[7/18] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
+[8/18] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_source.cpp.o
+[9/18] Linking CXX static library libedge_ai_core.a
+[10/18] Building CXX object CMakeFiles/edge_ai_batch_tests.dir/tests/batch_processor_tests.cpp.o
+[11/18] Building CXX object CMakeFiles/edge_ai_inference.dir/src/batch_processor.cpp.o
+[12/18] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
+[13/18] Linking CXX static library libedge_ai_inference.a
+[14/18] Linking CXX executable bin/edge_ai_batch_tests
+[15/18] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
+[16/18] Linking CXX executable bin/edge_ai
+[17/18] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
+[18/18] Linking CXX executable bin/edge_ai_tests
 
 $ ctest --test-dir build --output-on-failure
 Internal ctest changing into directory: $REPO_ROOT/build
 Test project $REPO_ROOT/build
-      Start  1: unit_preprocess_non_square
- 1/26 Test  #1: unit_preprocess_non_square ................   Passed    0.10 sec
-      Start  2: unit_postprocess_empty
- 2/26 Test  #2: unit_postprocess_empty ....................   Passed    0.06 sec
-      Start  3: unit_postprocess_nms_same_class
- 3/26 Test  #3: unit_postprocess_nms_same_class ...........   Passed    0.06 sec
-      Start  4: unit_postprocess_nms_cross_class
- 4/26 Test  #4: unit_postprocess_nms_cross_class ..........   Passed    0.05 sec
-      Start  5: unit_postprocess_coordinate_restore
- 5/26 Test  #5: unit_postprocess_coordinate_restore .......   Passed    0.06 sec
-      Start  6: unit_postprocess_nonfinite
- 6/26 Test  #6: unit_postprocess_nonfinite ................   Passed    0.06 sec
-      Start  7: unit_postprocess_score_range
- 7/26 Test  #7: unit_postprocess_score_range ..............   Passed    0.07 sec
-      Start  8: unit_postprocess_shape_mismatch
- 8/26 Test  #8: unit_postprocess_shape_mismatch ...........   Passed    0.07 sec
-      Start  9: unit_class_mapping_unknown
- 9/26 Test  #9: unit_class_mapping_unknown ................   Passed    0.06 sec
-      Start 10: unit_contract_validation
-10/26 Test #10: unit_contract_validation ..................   Passed    0.06 sec
-      Start 11: unit_class_metadata_parser
-11/26 Test #11: unit_class_metadata_parser ................   Passed    0.05 sec
-      Start 12: unit_quality_no_defects
-12/26 Test #12: unit_quality_no_defects ...................   Passed    0.06 sec
-      Start 13: unit_quality_single_defect
-13/26 Test #13: unit_quality_single_defect ................   Passed    0.06 sec
-      Start 14: unit_quality_below_threshold
-14/26 Test #14: unit_quality_below_threshold ..............   Passed    0.06 sec
-      Start 15: unit_quality_multiple_defects
-15/26 Test #15: unit_quality_multiple_defects .............   Passed    0.06 sec
-      Start 16: unit_quality_boundary
-16/26 Test #16: unit_quality_boundary .....................   Passed    0.05 sec
-      Start 17: unit_quality_invalid_threshold
-17/26 Test #17: unit_quality_invalid_threshold ............   Passed    0.06 sec
-      Start 18: unit_image_source_single
-18/26 Test #18: unit_image_source_single ..................   Passed    0.06 sec
-      Start 19: unit_image_source_directory
-19/26 Test #19: unit_image_source_directory ...............   Passed    0.06 sec
-      Start 20: cli_behavior
-20/26 Test #20: cli_behavior ..............................   Passed    2.11 sec
-      Start 21: cli_inference_failures
-21/26 Test #21: cli_inference_failures ....................   Passed    2.83 sec
-      Start 22: cli_empty_detections
-22/26 Test #22: cli_empty_detections ......................   Passed    0.33 sec
-      Start 23: cli_path_conflicts
-23/26 Test #23: cli_path_conflicts ........................   Passed    1.03 sec
-      Start 24: cli_batch
-24/26 Test #24: cli_batch .................................   Passed    1.34 sec
-      Start 25: cpp_reference_comparison
-25/26 Test #25: cpp_reference_comparison ..................   Passed    3.03 sec
-      Start 26: cpp_reference_rejects_incomplete_inputs
-26/26 Test #26: cpp_reference_rejects_incomplete_inputs ...   Passed    0.38 sec
+      Start  1: batch_source_exception
+ 1/27 Test  #1: batch_source_exception ....................   Passed    0.18 sec
+      Start  2: unit_preprocess_non_square
+ 2/27 Test  #2: unit_preprocess_non_square ................   Passed    0.13 sec
+      Start  3: unit_postprocess_empty
+ 3/27 Test  #3: unit_postprocess_empty ....................   Passed    0.06 sec
+      Start  4: unit_postprocess_nms_same_class
+ 4/27 Test  #4: unit_postprocess_nms_same_class ...........   Passed    0.06 sec
+      Start  5: unit_postprocess_nms_cross_class
+ 5/27 Test  #5: unit_postprocess_nms_cross_class ..........   Passed    0.06 sec
+      Start  6: unit_postprocess_coordinate_restore
+ 6/27 Test  #6: unit_postprocess_coordinate_restore .......   Passed    0.06 sec
+      Start  7: unit_postprocess_nonfinite
+ 7/27 Test  #7: unit_postprocess_nonfinite ................   Passed    0.07 sec
+      Start  8: unit_postprocess_score_range
+ 8/27 Test  #8: unit_postprocess_score_range ..............   Passed    0.06 sec
+      Start  9: unit_postprocess_shape_mismatch
+ 9/27 Test  #9: unit_postprocess_shape_mismatch ...........   Passed    0.07 sec
+      Start 10: unit_class_mapping_unknown
+10/27 Test #10: unit_class_mapping_unknown ................   Passed    0.05 sec
+      Start 11: unit_contract_validation
+11/27 Test #11: unit_contract_validation ..................   Passed    0.08 sec
+      Start 12: unit_class_metadata_parser
+12/27 Test #12: unit_class_metadata_parser ................   Passed    0.05 sec
+      Start 13: unit_quality_no_defects
+13/27 Test #13: unit_quality_no_defects ...................   Passed    0.06 sec
+      Start 14: unit_quality_single_defect
+14/27 Test #14: unit_quality_single_defect ................   Passed    0.06 sec
+      Start 15: unit_quality_below_threshold
+15/27 Test #15: unit_quality_below_threshold ..............   Passed    0.06 sec
+      Start 16: unit_quality_multiple_defects
+16/27 Test #16: unit_quality_multiple_defects .............   Passed    0.06 sec
+      Start 17: unit_quality_boundary
+17/27 Test #17: unit_quality_boundary .....................   Passed    0.06 sec
+      Start 18: unit_quality_invalid_threshold
+18/27 Test #18: unit_quality_invalid_threshold ............   Passed    0.05 sec
+      Start 19: unit_image_source_single
+19/27 Test #19: unit_image_source_single ..................   Passed    0.06 sec
+      Start 20: unit_image_source_directory
+20/27 Test #20: unit_image_source_directory ...............   Passed    0.07 sec
+      Start 21: cli_behavior
+21/27 Test #21: cli_behavior ..............................   Passed    1.80 sec
+      Start 22: cli_inference_failures
+22/27 Test #22: cli_inference_failures ....................   Passed    0.71 sec
+      Start 23: cli_empty_detections
+23/27 Test #23: cli_empty_detections ......................   Passed    0.15 sec
+      Start 24: cli_path_conflicts
+24/27 Test #24: cli_path_conflicts ........................   Passed    0.82 sec
+      Start 25: cli_batch
+25/27 Test #25: cli_batch .................................   Passed    1.07 sec
+      Start 26: cpp_reference_comparison
+26/27 Test #26: cpp_reference_comparison ..................   Passed    1.92 sec
+      Start 27: cpp_reference_rejects_incomplete_inputs
+27/27 Test #27: cpp_reference_rejects_incomplete_inputs ...   Passed    0.35 sec
 
-100% tests passed, 0 tests failed out of 26
+100% tests passed, 0 tests failed out of 27
 
-Total Test time (real) =  12.21 sec
+Total Test time (real) =   8.24 sec
 
-$ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image "$MODEL_DIR/test-images/crazing_101.jpg" --conf 0.25 --iou 0.45 --json-out build/verification/task3-single.json
+$ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image "$MODEL_DIR/test-images/crazing_101.jpg" --conf 0.25 --iou 0.45 --json-out build/verification/single.json
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider
 model: $MODEL_DIR/neu_det_yolov8n_best.onnx
 model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
@@ -128,7 +132,7 @@ thresholds: conf>0.25 iou=0.45
 detections: 0
 quality: OK (confidence>0.25, qualifying=0/0)
 
-$ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image-dir build/cli-batch-tests/real-batch --conf 0.25 --iou 0.45 --json-out build/verification/task3-batch.json
+$ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image-dir build/cli-batch-tests/real-batch --conf 0.25 --iou 0.45 --json-out build/verification/batch.json
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider
 model: $MODEL_DIR/neu_det_yolov8n_best.onnx
 model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
@@ -145,7 +149,7 @@ quality rule: NG if at least one detection has confidence > 0.25
 [NG] build/cli-batch-tests/real-batch/scratches_1.jpg detections=2
 summary: total=6 ok=0 ng=6 errors=0 skipped_unsupported=0
 
-$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image-dir build/cli-batch-tests/mixed --json-out build/verification/task3-mixed.json
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image-dir build/cli-batch-tests/mixed --json-out build/verification/mixed.json
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider
 model: tests/fixtures/zero_output.onnx
 model sha256: 22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697
@@ -157,6 +161,23 @@ quality rule: NG if at least one detection has confidence > 0.25
 [ERROR] build/cli-batch-tests/mixed/bad.jpg: failed to read image: build/cli-batch-tests/mixed/bad.jpg
 [OK] build/cli-batch-tests/mixed/valid.png detections=0
 summary: total=2 ok=1 ng=0 errors=1 skipped_unsupported=1
+# exit code: 1 (one corrupt frame)
+
+# JSON: completed frames have quality; failed frames have quality:null
+$ grep -E 'quality|timestamp_unix_ms' build/verification/single.json
+  "quality": {"status": "NG", "is_ng": true, "confidence_threshold": 0.25, "total_detections": 2, "qualifying_defects": 2},
+    "timestamp_unix_ms": 1794976002624,
+
+$ grep -E 'status|quality|timestamp_unix_ms' build/verification/mixed.json
+      "status": "ERROR",
+      "timestamp_unix_ms": null,
+      "quality": null
+      "status": "OK",
+      "timestamp_unix_ms": 1794976003470,
+      "quality": {"status": "OK", "is_ng": false, "confidence_threshold": 0.25, "total_detections": 0, "qualifying_defects": 0}
+
+$ ./build/bin/edge_ai_batch_tests
+batch source exception was contained; next frame processed
 
 # Invalid configuration
 $ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/non_square_320x200.png --conf 1.1

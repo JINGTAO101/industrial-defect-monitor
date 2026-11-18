@@ -12,6 +12,7 @@ namespace edge_ai {
 
 struct FrameResult {
     std::string source;
+    FrameTimestamp timestamp{};
     bool inference_ok = false;
     std::string error;
     int width = 0;
@@ -19,6 +20,7 @@ struct FrameResult {
     LetterboxInfo letterbox;
     std::vector<Detection> detections;
     std::vector<std::string> anomalies;
+    bool quality_available = false;
     QualityResult quality;
 };
 

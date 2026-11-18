@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -8,10 +9,18 @@
 
 namespace edge_ai {
 
+// Wall-clock time at which the image was successfully decoded, using
+// std::chrono::system_clock. This is a read/acquisition timestamp at the
+// software boundary, not EXIF capture time.
+using FrameTimestamp = std::chrono::system_clock::time_point;
+
 struct Frame {
     cv::Mat image;       // BGR 8UC3 after successful loading
     std::string source;  // file path
     std::size_t index = 0;
+    FrameTimestamp timestamp{};  // set on successful decode
+    // Width, height and channel count are available from image.cols,
+    // image.rows and image.channels(); they are intentionally not duplicated.
 };
 
 enum class SourceStatus { Frame, End, Error };
