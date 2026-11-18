@@ -19,7 +19,7 @@ $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$O
 -- ONNX Runtime headers: $ORT_DIR/include
 -- ONNX Runtime library: $ORT_DIR/lib/libonnxruntime.so
 -- OpenCV: 4.6.0
--- Configuring done (0.9s)
+-- Configuring done (0.5s)
 -- Generating done (0.0s)
 -- Build files have been written to: $REPO_ROOT/build
 
@@ -29,8 +29,8 @@ $ cmake --build build
 [3/23] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
 [4/23] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
 [5/23] Building CXX object CMakeFiles/edge_ai_core.dir/src/quality.cpp.o
-[6/23] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
-[7/23] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
+[6/23] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
+[7/23] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
 [8/23] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_source.cpp.o
 [9/23] Linking CXX static library libedge_ai_core.a
 [10/23] Building CXX object CMakeFiles/edge_ai_inference.dir/src/batch_processor.cpp.o
@@ -39,96 +39,100 @@ $ cmake --build build
 [13/23] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
 [14/23] Building CXX object CMakeFiles/edge_ai_inference.dir/src/threaded_pipeline.cpp.o
 [15/23] Linking CXX static library libedge_ai_inference.a
-[16/23] Linking CXX executable bin/edge_ai
-[17/23] Building CXX object CMakeFiles/edge_ai_threaded_tests.dir/tests/threaded_pipeline_tests.cpp.o
-[18/23] Linking CXX executable bin/edge_ai_batch_tests
+[16/23] Building CXX object CMakeFiles/edge_ai_threaded_tests.dir/tests/threaded_pipeline_tests.cpp.o
+[17/23] Linking CXX executable bin/edge_ai_batch_tests
+[18/23] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
 [19/23] Linking CXX executable bin/edge_ai_threaded_tests
-[20/23] Building CXX object CMakeFiles/edge_ai_queue_tests.dir/tests/queue_tests.cpp.o
-[21/23] Linking CXX executable bin/edge_ai_queue_tests
-[22/23] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
-[23/23] Linking CXX executable bin/edge_ai_tests
+[20/23] Linking CXX executable bin/edge_ai
+[21/23] Linking CXX executable bin/edge_ai_tests
+[22/23] Building CXX object CMakeFiles/edge_ai_queue_tests.dir/tests/queue_tests.cpp.o
+[23/23] Linking CXX executable bin/edge_ai_queue_tests
 
 $ ctest --test-dir build --output-on-failure
 Internal ctest changing into directory: $REPO_ROOT/build
 Test project $REPO_ROOT/build
       Start  1: batch_source_exception
- 1/37 Test  #1: batch_source_exception ....................   Passed    0.26 sec
+ 1/39 Test  #1: batch_source_exception ....................   Passed    0.13 sec
       Start  2: threaded_normal_drain
- 2/37 Test  #2: threaded_normal_drain .....................   Passed    0.15 sec
+ 2/39 Test  #2: threaded_normal_drain .....................   Passed    0.13 sec
       Start  3: threaded_full_backpressure
- 3/37 Test  #3: threaded_full_backpressure ................   Passed    0.28 sec
+ 3/39 Test  #3: threaded_full_backpressure ................   Passed    0.13 sec
       Start  4: threaded_fatal_wakes
- 4/37 Test  #4: threaded_fatal_wakes ......................   Passed    0.24 sec
-      Start  5: queue_reject_zero_capacity
- 5/37 Test  #5: queue_reject_zero_capacity ................   Passed    0.01 sec
-      Start  6: queue_full_blocks
- 6/37 Test  #6: queue_full_blocks .........................   Passed    0.11 sec
-      Start  7: queue_empty_blocks
- 7/37 Test  #7: queue_empty_blocks ........................   Passed    0.01 sec
-      Start  8: queue_close_drains
- 8/37 Test  #8: queue_close_drains ........................   Passed    0.00 sec
-      Start  9: queue_close_wakes_waiters
- 9/37 Test  #9: queue_close_wakes_waiters .................   Passed    0.01 sec
-      Start 10: queue_concurrent_no_loss
-10/37 Test #10: queue_concurrent_no_loss ..................   Passed    1.33 sec
-      Start 11: unit_preprocess_non_square
-11/37 Test #11: unit_preprocess_non_square ................   Passed    0.10 sec
-      Start 12: unit_postprocess_empty
-12/37 Test #12: unit_postprocess_empty ....................   Passed    0.07 sec
-      Start 13: unit_postprocess_nms_same_class
-13/37 Test #13: unit_postprocess_nms_same_class ...........   Passed    0.07 sec
-      Start 14: unit_postprocess_nms_cross_class
-14/37 Test #14: unit_postprocess_nms_cross_class ..........   Passed    0.07 sec
-      Start 15: unit_postprocess_coordinate_restore
-15/37 Test #15: unit_postprocess_coordinate_restore .......   Passed    0.06 sec
-      Start 16: unit_postprocess_nonfinite
-16/37 Test #16: unit_postprocess_nonfinite ................   Passed    0.09 sec
-      Start 17: unit_postprocess_score_range
-17/37 Test #17: unit_postprocess_score_range ..............   Passed    0.07 sec
-      Start 18: unit_postprocess_shape_mismatch
-18/37 Test #18: unit_postprocess_shape_mismatch ...........   Passed    0.06 sec
-      Start 19: unit_class_mapping_unknown
-19/37 Test #19: unit_class_mapping_unknown ................   Passed    0.08 sec
-      Start 20: unit_contract_validation
-20/37 Test #20: unit_contract_validation ..................   Passed    0.07 sec
-      Start 21: unit_class_metadata_parser
-21/37 Test #21: unit_class_metadata_parser ................   Passed    0.06 sec
-      Start 22: unit_quality_no_defects
-22/37 Test #22: unit_quality_no_defects ...................   Passed    0.06 sec
-      Start 23: unit_quality_single_defect
-23/37 Test #23: unit_quality_single_defect ................   Passed    0.06 sec
-      Start 24: unit_quality_below_threshold
-24/37 Test #24: unit_quality_below_threshold ..............   Passed    0.06 sec
-      Start 25: unit_quality_multiple_defects
-25/37 Test #25: unit_quality_multiple_defects .............   Passed    0.06 sec
-      Start 26: unit_quality_boundary
-26/37 Test #26: unit_quality_boundary .....................   Passed    0.07 sec
-      Start 27: unit_quality_invalid_threshold
-27/37 Test #27: unit_quality_invalid_threshold ............   Passed    0.07 sec
-      Start 28: unit_image_source_single
-28/37 Test #28: unit_image_source_single ..................   Passed    0.07 sec
-      Start 29: unit_image_source_directory
-29/37 Test #29: unit_image_source_directory ...............   Passed    0.08 sec
-      Start 30: cli_behavior
-30/37 Test #30: cli_behavior ..............................   Passed    2.12 sec
-      Start 31: cli_inference_failures
-31/37 Test #31: cli_inference_failures ....................   Passed    0.83 sec
-      Start 32: cli_empty_detections
-32/37 Test #32: cli_empty_detections ......................   Passed    0.15 sec
-      Start 33: cli_path_conflicts
-33/37 Test #33: cli_path_conflicts ........................   Passed    0.87 sec
-      Start 34: cli_batch
-34/37 Test #34: cli_batch .................................   Passed    1.60 sec
-      Start 35: cpp_reference_comparison
-35/37 Test #35: cpp_reference_comparison ..................   Passed    2.69 sec
-      Start 36: cpp_reference_rejects_incomplete_inputs
-36/37 Test #36: cpp_reference_rejects_incomplete_inputs ...   Passed    0.39 sec
-      Start 37: threaded_batch_reference
-37/37 Test #37: threaded_batch_reference ..................   Passed    0.89 sec
+ 4/39 Test  #4: threaded_fatal_wakes ......................   Passed    0.11 sec
+      Start  5: threaded_start_failure_inference
+ 5/39 Test  #5: threaded_start_failure_inference ..........   Passed    0.05 sec
+      Start  6: threaded_start_failure_result
+ 6/39 Test  #6: threaded_start_failure_result .............   Passed    0.06 sec
+      Start  7: queue_reject_zero_capacity
+ 7/39 Test  #7: queue_reject_zero_capacity ................   Passed    0.00 sec
+      Start  8: queue_full_blocks
+ 8/39 Test  #8: queue_full_blocks .........................   Passed    0.11 sec
+      Start  9: queue_empty_blocks
+ 9/39 Test  #9: queue_empty_blocks ........................   Passed    0.01 sec
+      Start 10: queue_close_drains
+10/39 Test #10: queue_close_drains ........................   Passed    0.00 sec
+      Start 11: queue_close_wakes_waiters
+11/39 Test #11: queue_close_wakes_waiters .................   Passed    0.01 sec
+      Start 12: queue_concurrent_no_loss
+12/39 Test #12: queue_concurrent_no_loss ..................   Passed    1.40 sec
+      Start 13: unit_preprocess_non_square
+13/39 Test #13: unit_preprocess_non_square ................   Passed    0.10 sec
+      Start 14: unit_postprocess_empty
+14/39 Test #14: unit_postprocess_empty ....................   Passed    0.06 sec
+      Start 15: unit_postprocess_nms_same_class
+15/39 Test #15: unit_postprocess_nms_same_class ...........   Passed    0.06 sec
+      Start 16: unit_postprocess_nms_cross_class
+16/39 Test #16: unit_postprocess_nms_cross_class ..........   Passed    0.06 sec
+      Start 17: unit_postprocess_coordinate_restore
+17/39 Test #17: unit_postprocess_coordinate_restore .......   Passed    0.07 sec
+      Start 18: unit_postprocess_nonfinite
+18/39 Test #18: unit_postprocess_nonfinite ................   Passed    0.06 sec
+      Start 19: unit_postprocess_score_range
+19/39 Test #19: unit_postprocess_score_range ..............   Passed    0.06 sec
+      Start 20: unit_postprocess_shape_mismatch
+20/39 Test #20: unit_postprocess_shape_mismatch ...........   Passed    0.06 sec
+      Start 21: unit_class_mapping_unknown
+21/39 Test #21: unit_class_mapping_unknown ................   Passed    0.06 sec
+      Start 22: unit_contract_validation
+22/39 Test #22: unit_contract_validation ..................   Passed    0.06 sec
+      Start 23: unit_class_metadata_parser
+23/39 Test #23: unit_class_metadata_parser ................   Passed    0.06 sec
+      Start 24: unit_quality_no_defects
+24/39 Test #24: unit_quality_no_defects ...................   Passed    0.06 sec
+      Start 25: unit_quality_single_defect
+25/39 Test #25: unit_quality_single_defect ................   Passed    0.06 sec
+      Start 26: unit_quality_below_threshold
+26/39 Test #26: unit_quality_below_threshold ..............   Passed    0.06 sec
+      Start 27: unit_quality_multiple_defects
+27/39 Test #27: unit_quality_multiple_defects .............   Passed    0.06 sec
+      Start 28: unit_quality_boundary
+28/39 Test #28: unit_quality_boundary .....................   Passed    0.06 sec
+      Start 29: unit_quality_invalid_threshold
+29/39 Test #29: unit_quality_invalid_threshold ............   Passed    0.06 sec
+      Start 30: unit_image_source_single
+30/39 Test #30: unit_image_source_single ..................   Passed    0.07 sec
+      Start 31: unit_image_source_directory
+31/39 Test #31: unit_image_source_directory ...............   Passed    0.06 sec
+      Start 32: cli_behavior
+32/39 Test #32: cli_behavior ..............................   Passed    2.12 sec
+      Start 33: cli_inference_failures
+33/39 Test #33: cli_inference_failures ....................   Passed    0.73 sec
+      Start 34: cli_empty_detections
+34/39 Test #34: cli_empty_detections ......................   Passed    0.15 sec
+      Start 35: cli_path_conflicts
+35/39 Test #35: cli_path_conflicts ........................   Passed    0.83 sec
+      Start 36: cli_batch
+36/39 Test #36: cli_batch .................................   Passed    1.66 sec
+      Start 37: cpp_reference_comparison
+37/39 Test #37: cpp_reference_comparison ..................   Passed    2.24 sec
+      Start 38: cpp_reference_rejects_incomplete_inputs
+38/39 Test #38: cpp_reference_rejects_incomplete_inputs ...   Passed    0.42 sec
+      Start 39: threaded_batch_reference
+39/39 Test #39: threaded_batch_reference ..................   Passed    0.69 sec
 
-100% tests passed, 0 tests failed out of 37
+100% tests passed, 0 tests failed out of 39
 
-Total Test time (real) =  13.28 sec
+Total Test time (real) =  12.20 sec
 
 $ ./build/bin/edge_ai_queue_tests queue_full_blocks
 full-block report: capacity=2 enqueued=3 dequeued=3 max_depth=2 producer_wait_count=1 consumer_wait_count=0
@@ -136,18 +140,20 @@ full-block report: capacity=2 enqueued=3 dequeued=3 max_depth=2 producer_wait_co
 1 test(s), 0 failure(s)
 
 $ ./build/bin/edge_ai_queue_tests queue_concurrent_no_loss
-concurrency report: capacity=4 enqueued=2000 dequeued=2000 max_depth=4 producer_wait_count=1975 consumer_wait_count=1
+concurrency report: capacity=4 enqueued=2000 dequeued=2000 max_depth=4 producer_wait_count=1955 consumer_wait_count=2
 [PASS] queue_concurrent_no_loss
 1 test(s), 0 failure(s)
 
 $ ./build/bin/edge_ai_threaded_tests
-normal pipeline: threads(reader=129064975185536, inference=129064966792832, result=129064958400128) queues(input cap=2 max=2, result cap=2 max=1) counts(total=4 ok=4 ng=0 errors=0)
+normal pipeline: threads(reader=127337047778944, inference=127337039386240, result=127337030993536) queues(input cap=2 max=2, result cap=2 max=1) counts(total=4 ok=4 ng=0 errors=0)
 [PASS] threaded_normal_drain
-backpressure: threads(reader=129064975185536, inference=129064966792832, result=129064931141248) queues(input cap=1 max=1 waits=4, result cap=1 max=1 waits=1) counts(total=5 ok=5 ng=0 errors=0)
+backpressure: threads(reader=127337047778944, inference=127337039386240, result=127337005827712) queues(input cap=1 max=1 waits=4, result cap=1 max=1 waits=1) counts(total=5 ok=5 ng=0 errors=0)
 [PASS] threaded_full_backpressure
-fatal exit: threads(reader=129064975185536, inference=129064966792832, result=129064931141248) queues(input cap=1 max=1, result cap=1 max=1) error="result callback failed: injected result failure"
+fatal exit: threads(reader=127337047778944, inference=127337039386240, result=127337005827712) queues(input cap=1 max=1, result cap=1 max=1) error="result callback failed: injected result failure"
 [PASS] threaded_fatal_wakes
-3 test(s), 0 failure(s)
+[PASS] threaded_start_failure_inference
+[PASS] threaded_start_failure_result
+5 test(s), 0 failure(s)
 
 $ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image-dir build/threaded-batch-reference/images --queue-capacity 1 --conf 0.25 --iou 0.45 --json-out build/verification/threaded-batch.json
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider
@@ -164,7 +170,7 @@ quality rule: NG if at least one detection has confidence > 0.25
 [NG] build/threaded-batch-reference/images/pitted_surface_1.jpg detections=2
 [NG] build/threaded-batch-reference/images/rolled-in_scale_1.jpg detections=2
 [NG] build/threaded-batch-reference/images/scratches_1.jpg detections=2
-threads: reader=127455494846080 inference=127455486453376 result=127455478060672
+threads: reader=139278713976448 inference=139278705583744 result=139278697191040
 queues: input capacity=1 max_depth=1 producer_waits=4 consumer_waits=1; result capacity=1 max_depth=1 producer_waits=0 consumer_waits=7
 summary: total=6 ok=0 ng=6 errors=0 skipped_unsupported=0
 
@@ -182,8 +188,8 @@ batch input: build/cli-batch-tests/mixed
 quality rule: NG if at least one detection has confidence > 0.25
 [ERROR] build/cli-batch-tests/mixed/bad.jpg: failed to read image: build/cli-batch-tests/mixed/bad.jpg
 [OK] build/cli-batch-tests/mixed/valid.png detections=0
-threads: reader=130977713546880 inference=130977705154176 result=130977696761472
-queues: input capacity=1 max_depth=1 producer_waits=0 consumer_waits=2; result capacity=1 max_depth=1 producer_waits=0 consumer_waits=2
+threads: reader=131900200511104 inference=131900123379328 result=131900114986624
+queues: input capacity=1 max_depth=1 producer_waits=1 consumer_waits=2; result capacity=1 max_depth=1 producer_waits=0 consumer_waits=2
 summary: total=2 ok=1 ng=0 errors=1 skipped_unsupported=1
 # exit code: 1 (one corrupt frame)
 
@@ -192,14 +198,18 @@ summary: total=2 ok=1 ng=0 errors=1 skipped_unsupported=1
       "timestamp_unix_ms": null,
       "quality": null
       "status": "OK",
-      "timestamp_unix_ms": 1794982879131,
+      "timestamp_unix_ms": 1794983542363,
       "quality": {"status": "OK", "is_ng": false, "confidence_threshold": 0.25, "total_detections": 0, "qualifying_defects": 0}
 
 $ ./build/bin/edge_ai_batch_tests
 SourceStatus::Error continued; persistent source exception stopped after one attempt
 
-# Invalid configuration
-$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/non_square_320x200.png --conf 1.1
-edge_ai: --conf must be in (0, 1], got 1.1
+# Invalid capacity parsing
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/non_square_320x200.png --queue-capacity=-1
+edge_ai: --queue-capacity must be greater than 0
+Try 'edge_ai --help' for more information.
+# exit code: 2
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/non_square_320x200.png --queue-capacity=18446744073709551616
+edge_ai: invalid value for --queue-capacity: '18446744073709551616'
 Try 'edge_ai --help' for more information.
 # exit code: 2

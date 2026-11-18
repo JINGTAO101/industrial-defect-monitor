@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <utility>
@@ -45,6 +46,22 @@ public:
     BoundedQueue(BoundedQueue&&) = delete;
     BoundedQueue& operator=(BoundedQueue&&) = delete;
 
+    // Test/instrumentation hook invoked just before a producer blocks on a
+    // full queue. It runs while the queue mutex is held, so it must not call
+    // back into this queue or block.
+    void setProducerWaitCallback(std::function<void()> callback)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        producer_wait_callback_ = std::move(callback);
+    }
+
+    // As above, but for consumers about to block on an empty queue.
+    void setConsumerWaitCallback(std::function<void()> callback)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        consumer_wait_callback_ = std::move(callback);
+    }
+
     // Blocks while full. Returns false if the queue was closed (either before
     // the call or while waiting for space); a rejected item is not enqueued.
     bool push(T value)
@@ -55,6 +72,9 @@ public:
         }
         if (queue_.size() >= capacity_) {
             ++stats_.producer_wait_count;
+            if (producer_wait_callback_) {
+                producer_wait_callback_();
+            }
             not_full_.wait(lock, [this] {
                 return closed_ || queue_.size() < capacity_;
             });
@@ -82,6 +102,9 @@ public:
                 return PopStatus::Closed;
             }
             ++stats_.consumer_wait_count;
+            if (consumer_wait_callback_) {
+                consumer_wait_callback_();
+            }
             not_empty_.wait(lock, [this] {
                 return closed_ || !queue_.empty();
             });
@@ -140,6 +163,8 @@ private:
     std::deque<T> queue_;
     bool closed_ = false;
     QueueStats stats_;
+    std::function<void()> producer_wait_callback_;
+    std::function<void()> consumer_wait_callback_;
 };
 
 }  // namespace edge_ai

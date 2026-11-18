@@ -28,7 +28,8 @@ result BoundedQueue<FrameResult> (单生产者 / 单消费者)
 - 结果线程是唯一修改 `BatchResult` 和 total/ok/ng/errors 的线程；回调也只在
   该线程按输入顺序调用。
 - 两个队列均为 `BoundedQueue`；容量由 `--queue-capacity` 同时设置（默认 4，
-  必须 >0）。满载时对应生产者阻塞，形成背压。
+  必须 >0）。满载时对应生产者阻塞，形成背压。负值、0 和超出 `size_t` 范围
+  的值在 CLI 解析阶段返回 2。
 
 ## 2. 正常排空与错误策略
 
@@ -39,6 +40,9 @@ result BoundedQueue<FrameResult> (单生产者 / 单消费者)
 - 逃逸出 `ImageSource::next()` 的异常、或结果回调返回 `false`/抛异常，视为
   致命错误：关闭两个队列，唤醒阻塞的读取/推理/结果线程，join 全部线程，
   `run()` 返回 `false` 和诊断信息。
+- 创建第 2/3 个线程时若抛出 `std::system_error`，不会让仍可 join 的线程在
+  栈展开中析构；代码关闭两个队列、join 已启动线程，再返回带阶段名称的
+  启动失败错误。
 - 结果回调由结果线程调用；正常 CLI 回调只打印每帧状态并返回 `true`。
 
 ## 3. 验收场景实测
@@ -58,7 +62,7 @@ result BoundedQueue<FrameResult> (单生产者 / 单消费者)
 实际输出（线程标识为本次运行值）：
 
 ```text
-threads: reader=127455494846080 inference=127455486453376 result=127455478060672
+threads: reader=139278713976448 inference=139278705583744 result=139278697191040
 queues: input capacity=1 max_depth=1 producer_waits=4 consumer_waits=1;
         result capacity=1 max_depth=1 producer_waits=0 consumer_waits=7
 summary: total=6 ok=0 ng=6 errors=0 skipped_unsupported=0
@@ -76,8 +80,9 @@ max_conf_diff=1.192e-06 max_bbox_diff=3.436e-05
 
 ### 场景 2：容量 1 受控积压
 
-`threaded_full_backpressure` 使用两个容量 1 队列，结果回调在收到第一条结果
-后暂停 150ms 再放行，制造两个队列同时满载：
+`threaded_full_backpressure` 使用两个容量 1 队列。结果回调在收到第一条结果
+后暂停；测试通过输入/结果队列的生产者等待钩子确认两个生产者都已进入等待，
+再放行回调，确保积压确实发生：
 
 ```text
 backpressure: threads(reader=..., inference=..., result=...)
@@ -91,8 +96,8 @@ counts(total=5 ok=5 ng=0 errors=0)
 
 ### 场景 3：下游致命错误唤醒退出
 
-`threaded_fatal_wakes` 在结果回调中暂停后注入失败（返回 `false`），此时读取
-和推理线程正被两个满队列阻塞：
+`threaded_fatal_wakes` 先暂停结果回调，并通过两个队列的等待钩子确认读取和
+推理线程都已阻塞，再注入失败（返回 `false`）：
 
 ```text
 fatal exit: threads(reader=..., inference=..., result=...)
@@ -115,10 +120,12 @@ ctest --test-dir build --output-on-failure
 | --- | --- |
 | `threaded_normal_drain` | 三线程正常排空、顺序、线程 ID、队列深度 |
 | `threaded_full_backpressure` | 两队列容量 1、受控暂停、满载等待、序号唯一 |
-| `threaded_fatal_wakes` | 下游失败唤醒阻塞线程、join、错误返回 |
+| `threaded_fatal_wakes` | 等两个生产者都进入等待后注入下游失败，验证唤醒、join、错误返回 |
+| `threaded_start_failure_inference` | 第 2 个线程启动失败：关闭队列、join reader、返回错误 |
+| `threaded_start_failure_result` | 第 3 个线程启动失败：关闭队列、join reader/inference、返回错误 |
 | `threaded_batch_reference` | 六图真实模型批量顺序/检测结果与参考一致（可选） |
 
-本次配置总计 37/37 通过；不提供真实模型/六图时 34 个测试通过。
+本次配置总计 39/39 通过；不提供真实模型/六图时 36 个测试通过。
 
 ## 5. 限制
 

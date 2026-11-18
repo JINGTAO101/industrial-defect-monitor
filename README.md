@@ -135,10 +135,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 34 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 36 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线）；提供 `EDGE_AI_MODEL_PATH`、
 `EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照、对照
-守卫和线程化批量对照测试，共 37 个。本次验证 37/37 通过。
+守卫和线程化批量对照测试，共 39 个。本次验证 39/39 通过。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -170,8 +170,12 @@ ctest --test-dir build --output-on-failure
 
 - `threaded_normal_drain`：读取/推理/结果三线程正常排空，序号顺序与队列深度；
 - `threaded_full_backpressure`：两个容量 1 队列、受控暂停、满载等待、序号唯一；
-- `threaded_fatal_wakes`：下游回调致命失败时唤醒并 join 三个线程、返回错误；
+- `threaded_fatal_wakes`：在确认两个生产者都已等待后用同步信号注入失败，
+  验证唤醒、join 和错误返回；
+- `threaded_start_failure_inference` / `threaded_start_failure_result`：
+  注入第 2/3 个线程启动失败，验证已启动线程被回收且进程不终止；
 - `threaded_batch_reference`：六图真实模型批量顺序/检测结果与参考对照（可选）。
+- `--queue-capacity=-1` 与超出 `size_t` 的容量值会在 CLI 解析阶段返回 2。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
@@ -324,7 +328,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 37
+100% tests passed, 0 tests failed out of 39
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45

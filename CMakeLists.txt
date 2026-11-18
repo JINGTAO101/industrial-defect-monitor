@@ -168,7 +168,9 @@ if(BUILD_TESTING)
     foreach(threaded_test
             threaded_normal_drain
             threaded_full_backpressure
-            threaded_fatal_wakes)
+            threaded_fatal_wakes
+            threaded_start_failure_inference
+            threaded_start_failure_result)
         add_test(NAME ${threaded_test} COMMAND edge_ai_threaded_tests ${threaded_test})
         set_tests_properties(${threaded_test} PROPERTIES TIMEOUT 10)
     endforeach()

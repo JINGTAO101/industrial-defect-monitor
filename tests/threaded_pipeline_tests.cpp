@@ -2,8 +2,11 @@
 #include <chrono>
 #include <cstddef>
 #include <future>
+#include <functional>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -60,6 +63,35 @@ private:
     int next_ = 0;
 };
 
+struct ProducerWaitSignals {
+    std::atomic<bool> input_seen{false};
+    std::atomic<bool> result_seen{false};
+    std::promise<void> input_waiting;
+    std::promise<void> result_waiting;
+    std::future<void> input_future = input_waiting.get_future();
+    std::future<void> result_future = result_waiting.get_future();
+
+    std::function<void()> input_callback()
+    {
+        return [this] {
+            bool expected = false;
+            if (input_seen.compare_exchange_strong(expected, true)) {
+                input_waiting.set_value();
+            }
+        };
+    }
+
+    std::function<void()> result_callback()
+    {
+        return [this] {
+            bool expected = false;
+            if (result_seen.compare_exchange_strong(expected, true)) {
+                result_waiting.set_value();
+            }
+        };
+    }
+};
+
 bool distinctThreads(const edge_ai::PipelineStats& stats)
 {
     return stats.reader_thread != std::thread::id{} &&
@@ -89,9 +121,11 @@ bool testNormalDrain(std::string& error)
     }
 
     SequenceSource source(4);
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = 2;
+    pipeline_options.result_queue_capacity = 2;
     edge_ai::ThreadedPipeline pipeline(
-        source, *runner, edge_ai::PostprocessOptions{},
-        edge_ai::PipelineOptions{2, 2});
+        source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
     std::vector<std::size_t> callback_indices;
     const edge_ai::ResultCallback callback =
         [&](const edge_ai::FrameResult& frame, std::string&) {
@@ -147,9 +181,16 @@ bool testFullBackpressure(std::string& error)
     }
 
     SequenceSource source(5);
+    ProducerWaitSignals wait_signals;
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = 1;
+    pipeline_options.result_queue_capacity = 1;
+    pipeline_options.input_producer_wait_hook =
+        wait_signals.input_callback();
+    pipeline_options.result_producer_wait_hook =
+        wait_signals.result_callback();
     edge_ai::ThreadedPipeline pipeline(
-        source, *runner, edge_ai::PostprocessOptions{},
-        edge_ai::PipelineOptions{1, 1});
+        source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
 
     std::promise<void> first_result;
     std::future<void> first_future = first_result.get_future();
@@ -177,17 +218,22 @@ bool testFullBackpressure(std::string& error)
         run_ok = pipeline.run(batch, stats, callback, fatal_error);
     });
 
-    if (first_future.wait_for(2000ms) != std::future_status::ready) {
+    if (first_future.wait_for(2000ms) != std::future_status::ready ||
+        wait_signals.input_future.wait_for(2000ms) !=
+            std::future_status::ready ||
+        wait_signals.result_future.wait_for(2000ms) !=
+            std::future_status::ready) {
         timed_out = true;
         release_result.set_value();
     } else {
-        std::this_thread::sleep_for(150ms);
         release_result.set_value();
     }
     runner_thread.join();
 
     if (timed_out) {
-        return expect(false, "pipeline never produced a paused result", error);
+        return expect(false,
+                      "pipeline did not block both producers before release",
+                      error);
     }
     if (!expect(run_ok, "backpressure pipeline failed: " + fatal_error, error) ||
         !expect(batch.frames.size() == 5 && batch.ok_count == 5 &&
@@ -241,9 +287,16 @@ bool testFatalWakesWaiters(std::string& error)
     }
 
     SequenceSource source(10);
+    ProducerWaitSignals wait_signals;
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = 1;
+    pipeline_options.result_queue_capacity = 1;
+    pipeline_options.input_producer_wait_hook =
+        wait_signals.input_callback();
+    pipeline_options.result_producer_wait_hook =
+        wait_signals.result_callback();
     edge_ai::ThreadedPipeline pipeline(
-        source, *runner, edge_ai::PostprocessOptions{},
-        edge_ai::PipelineOptions{1, 1});
+        source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
 
     std::promise<void> first_result;
     std::future<void> first_future = first_result.get_future();
@@ -271,17 +324,22 @@ bool testFatalWakesWaiters(std::string& error)
         run_ok = pipeline.run(batch, stats, callback, fatal_error);
     });
 
-    if (first_future.wait_for(2000ms) != std::future_status::ready) {
+    if (first_future.wait_for(2000ms) != std::future_status::ready ||
+        wait_signals.input_future.wait_for(2000ms) !=
+            std::future_status::ready ||
+        wait_signals.result_future.wait_for(2000ms) !=
+            std::future_status::ready) {
         timed_out = true;
         fail_result.set_value();
     } else {
-        std::this_thread::sleep_for(150ms);
         fail_result.set_value();
     }
     runner_thread.join();
 
     if (timed_out) {
-        return expect(false, "pipeline never produced a paused result", error);
+        return expect(false,
+                      "pipeline did not block both producers before the fatal error",
+                      error);
     }
     if (!expect(!run_ok, "fatal callback did not fail the pipeline", error) ||
         !expect(fatal_error.find("result callback failed") !=
@@ -294,7 +352,11 @@ bool testFatalWakesWaiters(std::string& error)
                 "fatal pipeline lost one of its three threads", error) ||
         !expect(stats.input_queue_stats.max_depth <= 1 &&
                     stats.result_queue_stats.max_depth <= 1,
-                "fatal pipeline exceeded queue capacity", error)) {
+                "fatal pipeline exceeded queue capacity", error) ||
+        !expect(stats.input_queue_stats.producer_wait_count > 0 &&
+                    stats.result_queue_stats.producer_wait_count > 0,
+                "fatal pipeline did not confirm both producers blocked",
+                error)) {
         return false;
     }
 
@@ -309,6 +371,64 @@ bool testFatalWakesWaiters(std::string& error)
     return true;
 }
 
+bool runStartFailure(
+    edge_ai::PipelineStage fail_stage,
+    const std::string& stage_name,
+    std::string& error)
+{
+    std::unique_ptr<edge_ai::ModelRunner> runner;
+    std::string load_error;
+    if (!expect(loadRunner(runner, load_error),
+                "cannot load zero_output.onnx: " + load_error, error)) {
+        return false;
+    }
+
+    SequenceSource source(5);
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = 1;
+    pipeline_options.result_queue_capacity = 1;
+    pipeline_options.thread_factory =
+        [fail_stage](edge_ai::PipelineStage stage,
+                     std::function<void()> task) -> std::thread {
+        if (stage == fail_stage) {
+            throw std::system_error(
+                std::make_error_code(std::errc::resource_unavailable_try_again),
+                "injected thread start failure");
+        }
+        return std::thread(std::move(task));
+    };
+
+    edge_ai::ThreadedPipeline pipeline(
+        source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
+    edge_ai::BatchResult batch;
+    edge_ai::PipelineStats stats;
+    std::string fatal_error;
+    const bool run_ok = pipeline.run(
+        batch, stats, edge_ai::ResultCallback{}, fatal_error);
+    if (!expect(!run_ok, "pipeline unexpectedly started all threads", error) ||
+        !expect(fatal_error.find("failed to start " + stage_name + " thread") !=
+                    std::string::npos,
+                "thread-start failure lacks stage: " + fatal_error, error) ||
+        !expect(fatal_error.find("injected thread start failure") !=
+                    std::string::npos,
+                "thread-start failure lacks injected detail: " + fatal_error,
+                error)) {
+        return false;
+    }
+    return true;
+}
+
+bool testStartFailureInference(std::string& error)
+{
+    return runStartFailure(edge_ai::PipelineStage::Inference, "inference",
+                           error);
+}
+
+bool testStartFailureResult(std::string& error)
+{
+    return runStartFailure(edge_ai::PipelineStage::Result, "result", error);
+}
+
 }  // namespace
 
 int main(int argc, char* argv[])
@@ -317,6 +437,8 @@ int main(int argc, char* argv[])
         {"threaded_normal_drain", testNormalDrain},
         {"threaded_full_backpressure", testFullBackpressure},
         {"threaded_fatal_wakes", testFatalWakesWaiters},
+        {"threaded_start_failure_inference", testStartFailureInference},
+        {"threaded_start_failure_result", testStartFailureResult},
     };
 
     const std::string filter = argc > 1 ? argv[1] : "";

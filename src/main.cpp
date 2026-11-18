@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -6,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -86,6 +88,17 @@ bool parseSizeOption(
     std::size_t& output,
     std::string& error)
 {
+    std::size_t first = 0;
+    while (first < value.size() &&
+           std::isspace(static_cast<unsigned char>(value[first])) != 0) {
+        ++first;
+    }
+    // stoull("-1") wraps to a huge unsigned value; reject the sign before
+    // conversion so a typo cannot silently disable backpressure.
+    if (first == value.size() || value[first] == '-') {
+        error = name + " must be greater than 0";
+        return false;
+    }
     try {
         std::size_t consumed = 0;
         const unsigned long long parsed = std::stoull(value, &consumed);
@@ -95,6 +108,10 @@ bool parseSizeOption(
         }
         if (parsed == 0) {
             error = name + " must be greater than 0";
+            return false;
+        }
+        if (parsed > std::numeric_limits<std::size_t>::max()) {
+            error = name + " is too large";
             return false;
         }
         output = static_cast<std::size_t>(parsed);
@@ -882,8 +899,9 @@ int runBatch(const Options& options)
 
     const edge_ai::PostprocessOptions postprocess_options{
         options.conf_threshold, options.iou_threshold};
-    const edge_ai::PipelineOptions pipeline_options{
-        options.queue_capacity, options.queue_capacity};
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = options.queue_capacity;
+    pipeline_options.result_queue_capacity = options.queue_capacity;
     edge_ai::ThreadedPipeline pipeline(source, *runner, postprocess_options,
                                       pipeline_options);
 

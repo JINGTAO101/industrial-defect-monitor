@@ -12,9 +12,21 @@
 
 namespace edge_ai {
 
+enum class PipelineStage { Reader, Inference, Result };
+
+// Test/instrumentation hook allowing a controlled thread-start failure.
+// The production path leaves this empty and uses std::thread.
+using ThreadFactory =
+    std::function<std::thread(PipelineStage, std::function<void()>)>;
+
 struct PipelineOptions {
     std::size_t input_queue_capacity = 4;
     std::size_t result_queue_capacity = 4;
+    // Invoked just before the corresponding producer blocks on a full queue.
+    std::function<void()> input_producer_wait_hook;
+    std::function<void()> result_producer_wait_hook;
+    // Optional injection point for thread-start failure tests.
+    ThreadFactory thread_factory;
 };
 
 struct PipelineStats {

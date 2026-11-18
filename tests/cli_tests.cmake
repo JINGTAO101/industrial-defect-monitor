@@ -253,6 +253,14 @@ if(NOT queue_zero_rc EQUAL 2 OR
         "--queue-capacity 0 not rejected: rc=${queue_zero_rc}, stderr=${queue_zero_err}")
 endif()
 
+expect_invalid_threshold(
+    "queue capacity -1" "greater than 0" --queue-capacity=-1
+)
+expect_invalid_threshold(
+    "queue capacity overflow" "invalid value"
+    --queue-capacity=18446744073709551616
+)
+
 # 8. A valid image with a zero-output model must report OK.
 execute_process(
     COMMAND "${BIN}" --model "${FIXTURES}/zero_output.onnx"

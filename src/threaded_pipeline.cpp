@@ -52,6 +52,14 @@ bool ThreadedPipeline::run(
         pipeline_options_.input_queue_capacity);
     BoundedQueue<FrameResult> result_queue(
         pipeline_options_.result_queue_capacity);
+    if (pipeline_options_.input_producer_wait_hook) {
+        input_queue.setProducerWaitCallback(
+            pipeline_options_.input_producer_wait_hook);
+    }
+    if (pipeline_options_.result_producer_wait_hook) {
+        result_queue.setProducerWaitCallback(
+            pipeline_options_.result_producer_wait_hook);
+    }
 
     std::atomic<bool> stop{false};
     std::mutex fatal_mutex;
@@ -70,7 +78,7 @@ bool ThreadedPipeline::run(
 
     BatchResult batch;
 
-    std::thread reader([&] {
+    std::function<void()> reader_task = [&] {
         stats.reader_thread = std::this_thread::get_id();
         try {
             while (!stop.load()) {
@@ -103,9 +111,9 @@ bool ThreadedPipeline::run(
             request_stop("image source exception: unknown");
         }
         input_queue.close();
-    });
+    };
 
-    std::thread inference([&] {
+    std::function<void()> inference_task = [&] {
         stats.inference_thread = std::this_thread::get_id();
         while (!stop.load()) {
             InputItem item;
@@ -161,9 +169,9 @@ bool ThreadedPipeline::run(
             }
         }
         result_queue.close();
-    });
+    };
 
-    std::thread result_thread([&] {
+    std::function<void()> result_task = [&] {
         stats.result_thread = std::this_thread::get_id();
         while (!stop.load()) {
             FrameResult frame_result;
@@ -204,28 +212,93 @@ bool ThreadedPipeline::run(
                 }
             }
         }
-    });
+    };
 
-    reader.join();
-    inference.join();
-    result_thread.join();
-
-    stats.input_queue_stats = input_queue.stats();
-    stats.result_queue_stats = result_queue.stats();
-    stats.total = batch.frames.size();
-    stats.ok = batch.ok_count;
-    stats.ng = batch.ng_count;
-    stats.errors = batch.error_count;
-    result = std::move(batch);
-
-    {
-        std::lock_guard<std::mutex> lock(fatal_mutex);
-        if (!fatal_reason.empty()) {
-            fatal_error = fatal_reason;
+    const auto finalize = [&](const std::string& forced_error) {
+        stats.input_queue_stats = input_queue.stats();
+        stats.result_queue_stats = result_queue.stats();
+        stats.total = batch.frames.size();
+        stats.ok = batch.ok_count;
+        stats.ng = batch.ng_count;
+        stats.errors = batch.error_count;
+        result = std::move(batch);
+        if (!forced_error.empty()) {
+            fatal_error = forced_error;
             return false;
         }
+        {
+            std::lock_guard<std::mutex> lock(fatal_mutex);
+            if (!fatal_reason.empty()) {
+                fatal_error = fatal_reason;
+                return false;
+            }
+        }
+        return true;
+    };
+
+    std::thread reader_thread;
+    std::thread inference_thread;
+    std::thread result_thread;
+    std::string start_error;
+
+    const auto start_stage = [&](PipelineStage stage,
+                                 std::function<void()> task,
+                                 std::thread& target) {
+        try {
+            if (pipeline_options_.thread_factory) {
+                target = pipeline_options_.thread_factory(
+                    stage, std::move(task));
+            } else {
+                target = std::thread(std::move(task));
+            }
+            if (!target.joinable()) {
+                start_error = "thread factory returned a non-joinable thread";
+                return false;
+            }
+            return true;
+        } catch (const std::exception& exception) {
+            start_error = exception.what();
+        } catch (...) {
+            start_error = "unknown exception";
+        }
+        return false;
+    };
+
+    if (!start_stage(PipelineStage::Reader, std::move(reader_task),
+                     reader_thread)) {
+        const std::string message =
+            "failed to start reader thread: " + start_error;
+        request_stop(message);
+        return finalize(message);
     }
-    return true;
+    if (!start_stage(PipelineStage::Inference, std::move(inference_task),
+                     inference_thread)) {
+        const std::string message =
+            "failed to start inference thread: " + start_error;
+        request_stop(message);
+        if (reader_thread.joinable()) {
+            reader_thread.join();
+        }
+        return finalize(message);
+    }
+    if (!start_stage(PipelineStage::Result, std::move(result_task),
+                     result_thread)) {
+        const std::string message =
+            "failed to start result thread: " + start_error;
+        request_stop(message);
+        if (reader_thread.joinable()) {
+            reader_thread.join();
+        }
+        if (inference_thread.joinable()) {
+            inference_thread.join();
+        }
+        return finalize(message);
+    }
+
+    reader_thread.join();
+    inference_thread.join();
+    result_thread.join();
+    return finalize("");
 }
 
 }  // namespace edge_ai
