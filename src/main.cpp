@@ -19,6 +19,7 @@
 #include "postprocess.hpp"
 #include "quality.hpp"
 #include "system_info.hpp"
+#include "threaded_pipeline.hpp"
 
 #ifndef EDGE_AI_VERSION
 #define EDGE_AI_VERSION "0.2.0"
@@ -38,6 +39,8 @@ struct Options {
     std::string dump_input;
     float conf_threshold = 0.25f;
     float iou_threshold = 0.45f;
+    std::size_t queue_capacity = 4;
+    bool queue_capacity_set = false;
 };
 
 void printUsage(std::ostream& os)
@@ -58,6 +61,7 @@ void printUsage(std::ostream& os)
        << "  --iou <float>        NMS IoU threshold in (0, 1] (default 0.45)\n"
        << "  --json-out <path>    Write detection JSON (single result or batch summary)\n"
        << "  --dump-input <path>  Write the float32 NCHW input tensor (single image only)\n"
+       << "  --queue-capacity <n> Batch pipeline queue size (>0, default 4)\n"
        << "\n"
        << "Supported image extensions: jpg, jpeg, png, bmp, tif, tiff.\n"
        << "Batch processing continues after corrupt images, reports per-file errors,\n"
@@ -74,6 +78,31 @@ int printError(const std::string& message)
     std::cerr << kProgram << ": " << message << "\n"
               << "Try '" << kProgram << " --help' for more information.\n";
     return 2;
+}
+
+bool parseSizeOption(
+    const std::string& name,
+    const std::string& value,
+    std::size_t& output,
+    std::string& error)
+{
+    try {
+        std::size_t consumed = 0;
+        const unsigned long long parsed = std::stoull(value, &consumed);
+        if (consumed != value.size()) {
+            error = "invalid value for " + name + ": '" + value + "'";
+            return false;
+        }
+        if (parsed == 0) {
+            error = name + " must be greater than 0";
+            return false;
+        }
+        output = static_cast<std::size_t>(parsed);
+        return true;
+    } catch (const std::exception&) {
+        error = "invalid value for " + name + ": '" + value + "'";
+        return false;
+    }
 }
 
 bool parseFloatOption(
@@ -309,6 +338,14 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
                                   options.iou_threshold, error)) {
                 return false;
             }
+        } else if (option == "--queue-capacity") {
+            std::string value;
+            if (!take_value("--queue-capacity", value) ||
+                !parseSizeOption("--queue-capacity", value,
+                                 options.queue_capacity, error)) {
+                return false;
+            }
+            options.queue_capacity_set = true;
         } else if (!option.empty() && option.front() == '-') {
             error = "unknown option '" + option + "'";
             return false;
@@ -345,6 +382,10 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
     }
     if (has_image_dir && !options.dump_input.empty()) {
         error = "--dump-input is only supported with --image";
+        return false;
+    }
+    if (options.queue_capacity_set && !has_image_dir) {
+        error = "--queue-capacity is only supported with --image-dir";
         return false;
     }
     return true;
@@ -645,6 +686,7 @@ bool writeBatchJson(
         }
         os << "\n    {\n";
         os << "      \"source\": \"" << jsonEscape(frame.source) << "\",\n";
+        os << "      \"index\": " << frame.index << ",\n";
         os << "      \"status\": \"" << status << "\",\n";
         os << "      \"error\": \"" << jsonEscape(frame.error) << "\",\n";
         os << "      \"width\": " << frame.width << ",\n";
@@ -840,32 +882,61 @@ int runBatch(const Options& options)
 
     const edge_ai::PostprocessOptions postprocess_options{
         options.conf_threshold, options.iou_threshold};
-    edge_ai::BatchResult batch;
-    std::string fatal_error;
-    if (!edge_ai::processFrames(source, *runner, postprocess_options, batch,
-                                fatal_error)) {
-        std::cerr << kProgram << ": " << fatal_error << "\n";
-        return 1;
-    }
+    const edge_ai::PipelineOptions pipeline_options{
+        options.queue_capacity, options.queue_capacity};
+    edge_ai::ThreadedPipeline pipeline(source, *runner, postprocess_options,
+                                      pipeline_options);
 
     printModelInfo(runner->info());
     std::cout << "batch input: " << options.image_dir << "\n";
     std::cout << "quality rule: NG if at least one detection has confidence > "
               << options.conf_threshold << "\n";
-    for (const auto& frame : batch.frames) {
-        if (!frame.error.empty()) {
-            std::cout << "[ERROR] " << frame.source << ": " << frame.error
-                      << "\n";
-        } else {
-            std::cout << "[" << edge_ai::qualityLabel(frame.quality.is_ng)
-                      << "] " << frame.source
-                      << " detections=" << frame.detections.size() << "\n";
-        }
-        for (const auto& anomaly : frame.anomalies) {
-            std::cerr << "warning: " << frame.source << ": " << anomaly
-                      << "\n";
-        }
+
+    const edge_ai::ResultCallback callback =
+        [](const edge_ai::FrameResult& frame, std::string&) {
+            if (!frame.error.empty()) {
+                std::cout << "[ERROR] " << frame.source << ": "
+                          << frame.error << "\n";
+            } else {
+                std::cout << "["
+                          << edge_ai::qualityLabel(frame.quality.is_ng) << "] "
+                          << frame.source
+                          << " detections=" << frame.detections.size()
+                          << "\n";
+            }
+            for (const auto& anomaly : frame.anomalies) {
+                std::cerr << "warning: " << frame.source << ": " << anomaly
+                          << "\n";
+            }
+            return true;
+        };
+
+    edge_ai::BatchResult batch;
+    edge_ai::PipelineStats pipeline_stats;
+    std::string fatal_error;
+    if (!pipeline.run(batch, pipeline_stats, callback, fatal_error)) {
+        std::cerr << kProgram << ": " << fatal_error << "\n";
+        return 1;
     }
+    batch.skipped_unsupported = source.skippedUnsupported();
+
+    std::cout << "threads: reader=" << pipeline_stats.reader_thread
+              << " inference=" << pipeline_stats.inference_thread
+              << " result=" << pipeline_stats.result_thread << "\n";
+    std::cout << "queues: input capacity="
+              << pipeline_stats.input_queue_capacity
+              << " max_depth=" << pipeline_stats.input_queue_stats.max_depth
+              << " producer_waits="
+              << pipeline_stats.input_queue_stats.producer_wait_count
+              << " consumer_waits="
+              << pipeline_stats.input_queue_stats.consumer_wait_count
+              << "; result capacity="
+              << pipeline_stats.result_queue_capacity
+              << " max_depth=" << pipeline_stats.result_queue_stats.max_depth
+              << " producer_waits="
+              << pipeline_stats.result_queue_stats.producer_wait_count
+              << " consumer_waits="
+              << pipeline_stats.result_queue_stats.consumer_wait_count << "\n";
     std::cout << "summary: total=" << batch.frames.size()
               << " ok=" << batch.ok_count << " ng=" << batch.ng_count
               << " errors=" << batch.error_count

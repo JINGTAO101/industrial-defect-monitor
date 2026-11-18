@@ -27,6 +27,7 @@ file(WRITE "${TEST_DIR}/mixed/note.txt" "unsupported file")
 execute_process(
     COMMAND "${BIN}" --model "${FIXTURES}/zero_output.onnx"
         --image-dir "${TEST_DIR}/valid"
+        --queue-capacity 1
         --conf 0.25 --iou 0.45
         --json-out "${TEST_DIR}/valid.json"
     RESULT_VARIABLE valid_rc
@@ -63,6 +64,7 @@ endif()
 execute_process(
     COMMAND "${BIN}" --model "${FIXTURES}/zero_output.onnx"
         --image-dir "${TEST_DIR}/mixed"
+        --queue-capacity 1
         --conf 0.25 --iou 0.45
         --json-out "${TEST_DIR}/mixed.json"
     RESULT_VARIABLE mixed_rc
@@ -188,6 +190,7 @@ if(DEFINED REAL_MODEL AND NOT REAL_MODEL STREQUAL "" AND
     execute_process(
         COMMAND "${BIN}" --model "${REAL_MODEL}"
             --image-dir "${TEST_DIR}/real-batch"
+            --queue-capacity 1
             --conf 0.25 --iou 0.45
             --json-out "${TEST_DIR}/real-batch.json"
         RESULT_VARIABLE real_rc

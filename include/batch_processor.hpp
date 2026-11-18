@@ -12,6 +12,7 @@ namespace edge_ai {
 
 struct FrameResult {
     std::string source;
+    std::size_t index = 0;
     FrameTimestamp timestamp{};
     bool inference_ok = false;
     std::string error;

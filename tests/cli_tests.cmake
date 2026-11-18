@@ -224,6 +224,35 @@ expect_invalid_threshold("conf inf" "must be in" --conf=inf)
 expect_invalid_threshold("iou 0" "must be in" --iou 0)
 expect_invalid_threshold("iou 1.1" "must be in" --iou 1.1)
 
+# 7b. --queue-capacity validation.
+execute_process(
+    COMMAND "${BIN}" --model "${FIXTURES}/zero_output.onnx"
+        --image "${FIXTURES}/non_square_320x200.png"
+        --queue-capacity 1
+    RESULT_VARIABLE queue_single_rc
+    OUTPUT_VARIABLE queue_single_out
+    ERROR_VARIABLE queue_single_err
+)
+if(NOT queue_single_rc EQUAL 2 OR
+   NOT queue_single_err MATCHES "only supported with --image-dir")
+    message(FATAL_ERROR
+        "--queue-capacity with single image not rejected: rc=${queue_single_rc}, stderr=${queue_single_err}")
+endif()
+
+execute_process(
+    COMMAND "${BIN}" --model "${FIXTURES}/zero_output.onnx"
+        --image-dir "${FIXTURES}"
+        --queue-capacity 0
+    RESULT_VARIABLE queue_zero_rc
+    OUTPUT_VARIABLE queue_zero_out
+    ERROR_VARIABLE queue_zero_err
+)
+if(NOT queue_zero_rc EQUAL 2 OR
+   NOT queue_zero_err MATCHES "greater than 0")
+    message(FATAL_ERROR
+        "--queue-capacity 0 not rejected: rc=${queue_zero_rc}, stderr=${queue_zero_err}")
+endif()
+
 # 8. A valid image with a zero-output model must report OK.
 execute_process(
     COMMAND "${BIN}" --model "${FIXTURES}/zero_output.onnx"

@@ -97,6 +97,7 @@ add_library(edge_ai_inference STATIC
     src/model_runner.cpp
     src/sha256.cpp
     src/batch_processor.cpp
+    src/threaded_pipeline.cpp
 )
 target_include_directories(edge_ai_inference PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
 target_link_libraries(edge_ai_inference
@@ -153,6 +154,24 @@ if(BUILD_TESTING)
     add_test(NAME batch_source_exception COMMAND edge_ai_batch_tests)
     # A regression to the old retry-forever behavior must fail promptly.
     set_tests_properties(batch_source_exception PROPERTIES TIMEOUT 10)
+
+    add_executable(edge_ai_threaded_tests
+        tests/threaded_pipeline_tests.cpp
+    )
+    target_link_libraries(edge_ai_threaded_tests PRIVATE edge_ai_inference)
+    target_include_directories(edge_ai_threaded_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(edge_ai_threaded_tests PRIVATE
+        EDGE_AI_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    target_link_options(edge_ai_threaded_tests PRIVATE
+        "-Wl,-rpath,${ONNXRUNTIME_LIB_DIR}")
+    edge_ai_enable_warnings(edge_ai_threaded_tests)
+    foreach(threaded_test
+            threaded_normal_drain
+            threaded_full_backpressure
+            threaded_fatal_wakes)
+        add_test(NAME ${threaded_test} COMMAND edge_ai_threaded_tests ${threaded_test})
+        set_tests_properties(${threaded_test} PROPERTIES TIMEOUT 10)
+    endforeach()
 
     add_executable(edge_ai_queue_tests
         tests/queue_tests.cpp
@@ -266,6 +285,20 @@ if(BUILD_TESTING)
                 -DTEST_DIR=${CMAKE_BINARY_DIR}/reference-guard-tests
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compare_reference_guard_tests.cmake
         )
+
+        add_test(
+            NAME threaded_batch_reference
+            COMMAND ${CMAKE_COMMAND}
+                -DBIN=$<TARGET_FILE:edge_ai>
+                -DPYTHON=${EDGE_AI_PYTHON}
+                -DMODEL=${EDGE_AI_MODEL_PATH}
+                -DIMAGE_DIR=${EDGE_AI_TEST_IMAGES_DIR}
+                -DREFERENCE_RESULTS=${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-inference-results.json
+                -DCOMPARE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_batch_reference.py
+                -DTEST_DIR=${CMAKE_BINARY_DIR}/threaded-batch-reference
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/threaded_batch_reference.cmake
+        )
+        set_tests_properties(threaded_batch_reference PROPERTIES TIMEOUT 30)
     endif()
 endif()
 

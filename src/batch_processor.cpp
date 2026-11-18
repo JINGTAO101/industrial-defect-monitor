@@ -46,6 +46,7 @@ bool processFrames(
         FrameResult frame_result;
         frame_result.source =
             frame.source.empty() ? "<unknown source>" : frame.source;
+        frame_result.index = frame.index;
         frame_result.timestamp = frame.timestamp;
         if (status == SourceStatus::Error) {
             frame_result.error = error;

@@ -10,9 +10,11 @@
 - **任务 3**：统一 `Frame`/`ImageSource` 图片输入抽象，支持单图和目录批量，
   实现可配置阈值与 OK/NG 判定，覆盖坏文件继续策略和输入/阈值错误测试；
 - **任务 4A**：可关闭的线程安全有界队列，支持阻塞生产/消费、满载等待、
-  关闭排空和并发无丢失验证；4B 再接入采集/推理/事件线程。
+  关闭排空和并发无丢失验证；
+- **任务 4B**：`--image-dir` 批量检测接入读取/推理/结果三线程，两个容量 1
+  队列形成背压；覆盖六图正常排空、受控积压、下游致命错误唤醒退出。
 
-摄像头线程化、SQLite、MQTT 不在当前阶段范围内。
+SQLite、MQTT 不在当前阶段范围内。
 
 ## 已验证环境
 
@@ -99,11 +101,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   --conf 0.25 --iou 0.45 \
   --json-out build/verification/crazing_101.cpp.json
 
-# 目录批量推理
+# 目录批量推理（三线程流水线；queue-capacity 同时设置两个队列）
 ./build/bin/edge_ai \
   --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
   --image-dir "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/test-images" \
-  --conf 0.25 --iou 0.45 \
+  --queue-capacity 1 --conf 0.25 --iou 0.45 \
   --json-out build/verification/batch.json
 
 # 非法参数：stderr 报错，退出码 2
@@ -133,10 +135,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 31 个测试（单元测试 + CLI 失败路径 + 空检测 +
-路径冲突 + 批量输入 + 队列）；提供 `EDGE_AI_MODEL_PATH`、
-`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照和对照
-守卫测试，共 33 个。本次验证 33/33 通过。
+不提供真实模型路径时运行 34 个测试（单元测试 + CLI 失败路径 + 空检测 +
+路径冲突 + 批量输入 + 队列 + 三线程流水线）；提供 `EDGE_AI_MODEL_PATH`、
+`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照、对照
+守卫和线程化批量对照测试，共 37 个。本次验证 37/37 通过。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -164,6 +166,13 @@ ctest --test-dir build --output-on-failure
 - 递增序号 + 慢消费者的 2000 项并发无丢失/重复；
 - 所有队列测试通过 CTest `TIMEOUT 10` 防止死锁挂起。
 
+任务 4B 新增 4 个测试：
+
+- `threaded_normal_drain`：读取/推理/结果三线程正常排空，序号顺序与队列深度；
+- `threaded_full_backpressure`：两个容量 1 队列、受控暂停、满载等待、序号唯一；
+- `threaded_fatal_wakes`：下游回调致命失败时唤醒并 join 三个线程、返回错误；
+- `threaded_batch_reference`：六图真实模型批量顺序/检测结果与参考对照（可选）。
+
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
 指向模型、图片或彼此（含相对路径/悬空符号链接/硬链接）时被拒绝，且原文件
@@ -188,7 +197,8 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── postprocess.hpp
 │   ├── quality.hpp
 │   ├── sha256.hpp
-│   └── system_info.hpp
+│   ├── system_info.hpp
+│   └── threaded_pipeline.hpp
 ├── src/
 │   ├── batch_processor.cpp
 │   ├── image_preprocess.cpp
@@ -199,19 +209,22 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── postprocess.cpp
 │   ├── quality.cpp
 │   ├── sha256.cpp
-│   └── system_info.cpp
+│   ├── system_info.cpp
+│   └── threaded_pipeline.cpp
 ├── docs/
 │   ├── model-verification.md          # 2A 模型来源/许可/接口/参考推理
 │   ├── cpp-inference.md               # 2B C++ 推理与对照记录
-│   ├── cpp-inference-run.txt          # 2B/3/4A 干净构建/CTest/推理/失败路径运行日志
+│   ├── cpp-inference-run.txt          # 2B/3/4A/4B 干净构建/CTest/推理/失败路径运行日志
 │   ├── input-and-quality.md           # 任务 3 输入抽象与 OK/NG 判定
 │   ├── bounded-queue.md               # 任务 4A 队列语义与满载/并发指标
+│   ├── threaded-pipeline.md           # 任务 4B 三线程流水线与故障/积压记录
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
 │   ├── neu_det_reference.py
 │   ├── compare_author_predict.py
 │   ├── compare_cpp_reference.py       # C++ 与 2A 参考结果对照
+│   ├── compare_batch_reference.py     # 线程化六图批量与参考对照
 │   ├── reproduce_reference_verification.sh
 │   ├── generate_test_fixtures.py
 │   └── requirements-reference.txt
@@ -223,6 +236,8 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_batch_tests.cmake
     ├── compare_reference_guard_tests.cmake
     ├── queue_tests.cpp
+    ├── threaded_pipeline_tests.cpp
+    ├── threaded_batch_reference.cmake
     ├── unit_tests.cpp
     └── fixtures/                      # 合成图片/契约错误 ONNX/空输出模型/损坏模型
 ```
@@ -279,6 +294,21 @@ release v1.0.0）。详细记录见 [docs/model-verification.md](docs/model-veri
 producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚未接入主程序，
 4B 再完成三线程接线。
 
+## 任务 4B：三线程批量流水线
+
+详细设计、线程/队列指标与故障记录见
+[docs/threaded-pipeline.md](docs/threaded-pipeline.md)。`--image-dir` 现在使用：
+
+```text
+读取线程 -> 输入队列 -> 推理线程 -> 结果队列 -> 结果线程
+```
+
+两个队列容量由 `--queue-capacity` 设置（默认 4，必须 >0）；结果线程唯一维护
+顺序、total/ok/ng/errors 和汇总。六图真实模型容量 1 的正常排空结果为
+`total=6 ok=0 ng=6 errors=0`，检测结果与 2A/3 参考一致；容量 1 受控积压
+测试中两个队列最大深度均为 1；下游回调致命失败会关闭队列、唤醒并 join 全部
+线程后返回非零。
+
 ## 验收记录（2B/3）
 
 ```text
@@ -294,7 +324,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 33
+100% tests passed, 0 tests failed out of 37
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45
