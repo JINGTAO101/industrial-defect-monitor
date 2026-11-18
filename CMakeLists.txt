@@ -150,6 +150,8 @@ if(BUILD_TESTING)
         "-Wl,-rpath,${ONNXRUNTIME_LIB_DIR}")
     edge_ai_enable_warnings(edge_ai_batch_tests)
     add_test(NAME batch_source_exception COMMAND edge_ai_batch_tests)
+    # A regression to the old retry-forever behavior must fail promptly.
+    set_tests_properties(batch_source_exception PROPERTIES TIMEOUT 10)
 
     foreach(test_name
             preprocess_non_square

@@ -15,9 +15,11 @@
 
 namespace {
 
-class ThrowingSource final : public edge_ai::ImageSource {
+// A normal bad-frame source: returns SourceStatus::Error once, then a valid
+// frame. This must continue and produce one error plus one OK result.
+class ErrorThenFrameSource final : public edge_ai::ImageSource {
 public:
-    explicit ThrowingSource(std::string image_path)
+    explicit ErrorThenFrameSource(std::string image_path)
         : image_path_(std::move(image_path))
     {
     }
@@ -27,8 +29,9 @@ public:
     {
         if (step_ == 0) {
             ++step_;
-            frame.source = "throwing-source";
-            throw std::runtime_error("simulated image source exception");
+            frame.source = "bad-frame";
+            error = "simulated bad image";
+            return edge_ai::SourceStatus::Error;
         }
         if (step_ == 1) {
             ++step_;
@@ -51,6 +54,32 @@ private:
     int step_ = 0;
 };
 
+// A broken source that throws before advancing. processFrames must stop after
+// the first exception instead of retrying forever.
+class AlwaysThrowingSource final : public edge_ai::ImageSource {
+public:
+    edge_ai::SourceStatus next(edge_ai::Frame& frame,
+                               std::string&) override
+    {
+        ++attempts_;
+        frame.source = "always-throwing";
+        throw std::runtime_error("persistent source exception");
+    }
+
+    int attempts() const { return attempts_; }
+
+private:
+    int attempts_ = 0;
+};
+
+void print_batch(const edge_ai::BatchResult& batch)
+{
+    for (const auto& frame : batch.frames) {
+        std::cerr << "  frame " << frame.source
+                  << " error=" << frame.error << "\n";
+    }
+}
+
 }  // namespace
 
 int main()
@@ -63,39 +92,60 @@ int main()
         std::cerr << "cannot load zero_output.onnx: " << error << "\n";
         return 1;
     }
-
-    ThrowingSource source(fixture_dir + "/non_square_320x200.png");
-    edge_ai::BatchResult batch;
     const edge_ai::PostprocessOptions options{};
-    if (!edge_ai::processFrames(source, *runner, options, batch, error)) {
-        std::cerr << "processFrames failed: " << error << "\n";
+
+    ErrorThenFrameSource error_then_frame(
+        fixture_dir + "/non_square_320x200.png");
+    edge_ai::BatchResult batch;
+    if (!edge_ai::processFrames(error_then_frame, *runner, options, batch,
+                                error)) {
+        std::cerr << "processFrames unexpectedly failed: " << error << "\n";
         return 1;
     }
-
     bool ok = batch.frames.size() == 2 && batch.error_count == 1 &&
               batch.ok_count == 1 && batch.ng_count == 0;
     if (ok) {
-        ok = batch.frames[0].error.find("simulated image source exception") !=
-             std::string::npos;
+        ok = batch.frames[0].error.find("simulated bad image") !=
+                 std::string::npos &&
+             !batch.frames[0].quality_available;
     }
     if (ok) {
-        ok = !batch.frames[0].quality_available &&
-             batch.frames[1].quality_available &&
+        ok = batch.frames[1].quality_available &&
              batch.frames[1].inference_ok && !batch.frames[1].quality.is_ng &&
              batch.frames[1].timestamp != edge_ai::FrameTimestamp{};
     }
     if (!ok) {
-        std::cerr << "unexpected batch result: frames=" << batch.frames.size()
-                  << " errors=" << batch.error_count
+        std::cerr << "unexpected SourceStatus::Error batch result: frames="
+                  << batch.frames.size() << " errors=" << batch.error_count
                   << " ok=" << batch.ok_count << " ng=" << batch.ng_count
                   << "\n";
-        for (const auto& frame : batch.frames) {
-            std::cerr << "  frame " << frame.source
-                      << " error=" << frame.error << "\n";
-        }
+        print_batch(batch);
         return 1;
     }
 
-    std::cout << "batch source exception was contained; next frame processed\n";
+    AlwaysThrowingSource throwing;
+    edge_ai::BatchResult throwing_batch;
+    std::string fatal_error;
+    const bool processed = edge_ai::processFrames(
+        throwing, *runner, options, throwing_batch, fatal_error);
+    if (processed) {
+        std::cerr << "persistently throwing source was not treated as fatal\n";
+        return 1;
+    }
+    if (fatal_error.find("image source exception") == std::string::npos ||
+        fatal_error.find("persistent source exception") == std::string::npos) {
+        std::cerr << "fatal source error is not diagnostic: " << fatal_error
+                  << "\n";
+        return 1;
+    }
+    if (throwing.attempts() != 1 || !throwing_batch.frames.empty()) {
+        std::cerr << "persistently throwing source was retried or recorded:\n"
+                  << "  attempts=" << throwing.attempts()
+                  << " frames=" << throwing_batch.frames.size() << "\n";
+        return 1;
+    }
+
+    std::cout << "SourceStatus::Error continued; persistent source exception "
+                 "stopped after one attempt\n";
     return 0;
 }

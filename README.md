@@ -110,7 +110,9 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 
 `--image` 与 `--image-dir` 互斥；`--dump-input` 仅支持单图。支持
 `jpg/jpeg/png/bmp/tif/tiff`。批量目录中的其他扩展名文件会被跳过并在摘要中
-计数；损坏图片会记为 `[ERROR]` 后继续处理，最终退出码为 1。判定规则为：
+计数；损坏图片会记为 `[ERROR]` 后继续处理，最终退出码为 1。若
+`ImageSource::next()` 抛出无法确认已推进的异常，则视为致命错误立即停止
+（不重试）。判定规则为：
 至少一个检测的置信度严格大于 `--conf` 时 NG，否则 OK。非法 `--conf`/`--iou`
 （0、负数、>1、NaN、Inf）明确返回 2，不会静默使用默认值。
 
@@ -143,6 +145,9 @@ ctest --test-dir build --output-on-failure
 
 - 无缺陷 → OK、单缺陷 → NG、低于阈值 → OK、多缺陷 → NG；
 - 阈值边界（严格 `>`）和非法阈值（0/负数/>1/NaN/Inf）；
+- Frame 读取时间戳；失败帧 `quality:null` 且 `quality_available=false`；
+- 正常 `SourceStatus::Error` 后继续；持续抛异常的源在第一次异常后致命停止
+  （不重试、不会无限循环）；
 - 单图正常/缺失/不支持/损坏；目录批量正常、坏文件继续、扩展名跳过、缺失/空目录；
 - 批量全 OK、坏文件继续并汇总、批量 JSON、批量输出路径冲突、`--dump-input`
   与 `--image-dir` 组合拒绝；

@@ -28,15 +28,16 @@ bool processFrames(
         try {
             status = source.next(frame, error);
         } catch (const std::exception& exception) {
-            FrameResult frame_result;
-            frame_result.source =
-                frame.source.empty() ? "<unknown source>" : frame.source;
-            frame_result.timestamp = frame.timestamp;
-            frame_result.error =
-                std::string("image source exception: ") + exception.what();
-            result.frames.push_back(std::move(frame_result));
-            ++result.error_count;
-            continue;
+            // An escaping source exception means we cannot know whether the
+            // source advanced. Continuing could loop forever and grow the
+            // result list. Normal image failures must use SourceStatus::Error,
+            // which is handled below and does continue.
+            fatal_error = "image source exception";
+            if (!frame.source.empty()) {
+                fatal_error += " at '" + frame.source + "'";
+            }
+            fatal_error += ": " + std::string(exception.what());
+            return false;
         }
         if (status == SourceStatus::End) {
             break;

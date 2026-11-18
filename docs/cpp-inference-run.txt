@@ -177,7 +177,7 @@ $ grep -E 'status|quality|timestamp_unix_ms' build/verification/mixed.json
       "quality": {"status": "OK", "is_ng": false, "confidence_threshold": 0.25, "total_detections": 0, "qualifying_defects": 0}
 
 $ ./build/bin/edge_ai_batch_tests
-batch source exception was contained; next frame processed
+SourceStatus::Error continued; persistent source exception stopped after one attempt
 
 # Invalid configuration
 $ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/non_square_320x200.png --conf 1.1

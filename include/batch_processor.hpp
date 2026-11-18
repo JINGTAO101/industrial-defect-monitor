@@ -32,10 +32,11 @@ struct BatchResult {
     std::size_t skipped_unsupported = 0;
 };
 
-// Consumes any ImageSource implementation. Per-frame errors (unreadable image,
-// inference failure, etc.) are recorded and processing continues; the caller
-// decides the process exit code. An invalid confidence threshold is fatal and
-// returns false without processing frames.
+// Consumes any ImageSource implementation. SourceStatus::Error (unreadable
+// image, per-frame inference failure, etc.) is recorded and processing
+// continues. An exception escaping ImageSource::next() is treated as a fatal
+// source failure and returns false immediately, because the source may not
+// have advanced. An invalid confidence threshold is also fatal.
 bool processFrames(
     ImageSource& source,
     const ModelRunner& runner,

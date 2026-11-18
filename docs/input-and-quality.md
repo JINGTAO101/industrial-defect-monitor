@@ -73,9 +73,14 @@ public:
 - 目录不存在、不是目录或没有支持图片：明确报错，退出码 1。
 - 目录迭代初始化/递增失败或条目元数据读取失败：报明确目录枚举错误，不会
   误报为“没有支持的图片”。
-- 单个文件损坏：记录该帧 `[ERROR]`，**继续处理后续文件**；最终退出码为 1。
+- 单个文件损坏（`SourceStatus::Error`）：记录该帧 `[ERROR]`，**继续处理
+  后续文件**；最终退出码为 1。
+- 解码/OpenCV 异常在图片源内部被捕获并转换为 `SourceStatus::Error`，因此
+  正常坏图仍按“继续”处理。
+- 如果异常逃逸出 `ImageSource::next()`，说明无法确认源是否已推进：批处理
+  立即视为**致命错误**停止，不重试、不继续，也不会无限追加错误。
 - 所有文件处理成功（包括 OK 和 NG）：退出码 0。
-- 默认策略是“继续并汇报”，不是 fail-fast；这一行为已写入 README 和测试。
+- 默认策略是“坏图继续并汇报”；源级异常是 fatal；这一行为已写入 README 和测试。
 
 ## 3. Detection 与 QualityResult
 
@@ -180,7 +185,7 @@ ctest --test-dir build --output-on-failure
 | `unit_quality_invalid_threshold` | 0、负数、>1、NaN、Inf → 明确错误 |
 | `unit_image_source_single` | 单图正常/缺失/不支持/损坏 |
 | `unit_image_source_directory` | 批量正常、坏文件继续、扩展名跳过、缺失/空目录、读取时间戳 |
-| `batch_source_exception` | 图片源抛异常时批处理记录错误并继续下一帧 |
+| `batch_source_exception` | 正常 `SourceStatus::Error` 后继续下一帧；持续抛异常的源在第一次异常后致命停止（不重试） |
 | `cli_batch` | 全 OK、坏文件继续、跳过不支持文件、批量 JSON（失败帧 `quality: null`）、输出路径冲突、`--dump-input` 拒绝；有真实模型时验证六图全 NG |
 | `cli_behavior` | 单图缺失/不支持/损坏、非法阈值、单图 OK |
 
@@ -192,7 +197,8 @@ ctest --test-dir build --output-on-failure
 
 1. OK/NG 规则是 SRS 的暂定规则；默认阈值 `0.25` 是 2A 参考默认，不代表
    经过生产验证的质量阈值。
-2. 批量默认继续并汇总错误；没有自动重试、断点续跑或并发处理。
+2. 批量对正常坏图继续并汇总；对无法确认已推进的源异常立即停止；没有自动
+   重试、断点续跑或并发处理。
 3. 批量只处理固定扩展名；其他文件跳过并计数，不把它们当作图片错误。
 4. 彩色输入 BGR/RGB、模型精度、AGPL-3.0/NEU-DET 许可等限制与 2A/2B 相同，
    仍未解决。
