@@ -57,14 +57,32 @@ expect_failure(
 )
 
 if(DEFINED REAL_MODEL AND NOT REAL_MODEL STREQUAL "")
+    if(NOT DEFINED TEST_DIR)
+        message(FATAL_ERROR "TEST_DIR is required for invalid-image tests")
+    endif()
+    file(REMOVE_RECURSE "${TEST_DIR}")
+    file(MAKE_DIRECTORY "${TEST_DIR}")
+    file(WRITE "${TEST_DIR}/corrupt.jpg" "not an image")
     expect_failure(
-        "invalid image"
-        "failed to read image"
+        "unsupported image extension"
+        "unsupported image extension"
         --model "${REAL_MODEL}"
         --image "${FIXTURES}/corrupt_model.bin"
     )
+    expect_failure(
+        "corrupt image"
+        "failed to read image"
+        --model "${REAL_MODEL}"
+        --image "${TEST_DIR}/corrupt.jpg"
+    )
+    expect_failure(
+        "missing image"
+        "image file not found"
+        --model "${REAL_MODEL}"
+        --image "${TEST_DIR}/does-not-exist.png"
+    )
 else()
-    message(STATUS "invalid image test: SKIPPED (REAL_MODEL not provided)")
+    message(STATUS "invalid image tests: SKIPPED (REAL_MODEL not provided)")
 endif()
 
 message(STATUS "All CLI inference failure checks passed")

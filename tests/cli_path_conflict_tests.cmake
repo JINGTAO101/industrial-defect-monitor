@@ -48,7 +48,7 @@ expect_conflict(
 )
 expect_conflict(
     "json-out vs image"
-    "conflicts with image"
+    "conflicts with input image"
     --model "${MODEL}" --image "${IMAGE}" --json-out "${IMAGE}"
 )
 expect_conflict(
@@ -58,7 +58,7 @@ expect_conflict(
 )
 expect_conflict(
     "dump-input vs image"
-    "conflicts with image"
+    "conflicts with input image"
     --model "${MODEL}" --image "${IMAGE}" --dump-input "${IMAGE}"
 )
 

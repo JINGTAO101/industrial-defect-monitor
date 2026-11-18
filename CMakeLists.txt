@@ -79,6 +79,8 @@ add_library(edge_ai_core STATIC
     src/model_contract.cpp
     src/image_preprocess.cpp
     src/postprocess.cpp
+    src/quality.cpp
+    src/image_source.cpp
 )
 target_include_directories(edge_ai_core
     PUBLIC
@@ -93,6 +95,7 @@ edge_ai_enable_warnings(edge_ai_core)
 add_library(edge_ai_inference STATIC
     src/model_runner.cpp
     src/sha256.cpp
+    src/batch_processor.cpp
 )
 target_include_directories(edge_ai_inference PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
 target_link_libraries(edge_ai_inference
@@ -132,6 +135,8 @@ if(BUILD_TESTING)
     )
     target_link_libraries(edge_ai_tests PRIVATE edge_ai_core)
     target_include_directories(edge_ai_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(edge_ai_tests PRIVATE
+        EDGE_AI_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     edge_ai_enable_warnings(edge_ai_tests)
 
     foreach(test_name
@@ -145,7 +150,15 @@ if(BUILD_TESTING)
             postprocess_shape_mismatch
             class_mapping_unknown
             contract_validation
-            class_metadata_parser)
+            class_metadata_parser
+            quality_no_defects
+            quality_single_defect
+            quality_below_threshold
+            quality_multiple_defects
+            quality_boundary
+            quality_invalid_threshold
+            image_source_single
+            image_source_directory)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
     endforeach()
 
@@ -154,6 +167,7 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DBIN=$<TARGET_FILE:edge_ai>
             -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/cli-tests
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_tests.cmake
     )
 
@@ -163,6 +177,7 @@ if(BUILD_TESTING)
             -DBIN=$<TARGET_FILE:edge_ai>
             -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
             -DREAL_MODEL=${EDGE_AI_MODEL_PATH}
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/cli-inference-failure-tests
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_inference_tests.cmake
     )
 
@@ -181,6 +196,17 @@ if(BUILD_TESTING)
             -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
             -DTEST_DIR=${CMAKE_BINARY_DIR}/path-conflict-tests
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_path_conflict_tests.cmake
+    )
+
+    add_test(
+        NAME cli_batch
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/cli-batch-tests
+            -DREAL_MODEL=${EDGE_AI_MODEL_PATH}
+            -DREAL_IMAGE_DIR=${EDGE_AI_TEST_IMAGES_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_tests.cmake
     )
 
     if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)

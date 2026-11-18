@@ -11,10 +11,12 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
 
+#include "batch_processor.hpp"
+#include "image_source.hpp"
 #include "model_runner.hpp"
 #include "postprocess.hpp"
+#include "quality.hpp"
 #include "system_info.hpp"
 
 #ifndef EDGE_AI_VERSION
@@ -30,6 +32,7 @@ struct Options {
     bool show_version = false;
     std::string model_path;
     std::string image_path;
+    std::string image_dir;
     std::string json_out;
     std::string dump_input;
     float conf_threshold = 0.25f;
@@ -42,21 +45,26 @@ void printUsage(std::ostream& os)
        << "\n"
        << "Usage:\n"
        << "  edge_ai [OPTION]\n"
-       << "  edge_ai --model <model.onnx> --image <image> [OPTIONS]\n"
+       << "  edge_ai --model <model.onnx> (--image <image> | --image-dir <dir>) [OPTIONS]\n"
        << "\n"
        << "Options:\n"
        << "  -h, --help           Show this help message and exit\n"
        << "  -V, --version        Show version information and exit\n"
        << "  --model <path>       ONNX model path (required for inference)\n"
-       << "  --image <path>       Input image path (required for inference)\n"
+       << "  --image <path>       Single input image\n"
+       << "  --image-dir <dir>    Batch input directory\n"
        << "  --conf <float>       Confidence threshold in (0, 1] (default 0.25)\n"
        << "  --iou <float>        NMS IoU threshold in (0, 1] (default 0.45)\n"
-       << "  --json-out <path>    Write machine-readable detection result JSON\n"
-       << "  --dump-input <path>  Write the float32 NCHW input tensor (raw)\n"
+       << "  --json-out <path>    Write detection JSON (single result or batch summary)\n"
+       << "  --dump-input <path>  Write the float32 NCHW input tensor (single image only)\n"
        << "\n"
+       << "Supported image extensions: jpg, jpeg, png, bmp, tif, tiff.\n"
+       << "Batch processing continues after corrupt images, reports per-file errors,\n"
+       << "and exits 1 if any image failed. Quality rule: NG if at least one\n"
+       << "detection has confidence > --conf; otherwise OK.\n"
        << "Values beginning with '-' must use the --option=value form\n"
        << "(for example: --model=-model.onnx).\n"
-       << "With no --model/--image, edge_ai prints its startup banner.\n"
+       << "With no --model/image input, edge_ai prints its startup banner.\n"
        << "Unknown options are rejected with a non-zero exit code.\n";
 }
 
@@ -156,7 +164,10 @@ bool pathsConflict(const std::string& first, const std::string& second)
     return normalizedPath(first) == normalizedPath(second);
 }
 
-bool validateOutputPaths(const Options& options, std::string& error)
+bool validateOutputPaths(
+    const Options& options,
+    const std::vector<std::string>& input_images,
+    std::string& error)
 {
     if (!options.dump_input.empty() && !options.json_out.empty() &&
         pathsConflict(options.dump_input, options.json_out)) {
@@ -164,31 +175,27 @@ bool validateOutputPaths(const Options& options, std::string& error)
                 options.json_out + "' refer to the same file";
         return false;
     }
-    if (!options.dump_input.empty()) {
-        if (pathsConflict(options.dump_input, options.model_path)) {
-            error = "output path '" + options.dump_input +
-                    "' conflicts with model path '" + options.model_path + "'";
+
+    const auto check_output = [&](const std::string& output) {
+        if (output.empty()) {
+            return true;
+        }
+        if (pathsConflict(output, options.model_path)) {
+            error = "output path '" + output + "' conflicts with model path '" +
+                    options.model_path + "'";
             return false;
         }
-        if (pathsConflict(options.dump_input, options.image_path)) {
-            error = "output path '" + options.dump_input +
-                    "' conflicts with image path '" + options.image_path + "'";
-            return false;
+        for (const std::string& input : input_images) {
+            if (pathsConflict(output, input)) {
+                error = "output path '" + output +
+                        "' conflicts with input image path '" + input + "'";
+                return false;
+            }
         }
-    }
-    if (!options.json_out.empty()) {
-        if (pathsConflict(options.json_out, options.model_path)) {
-            error = "output path '" + options.json_out +
-                    "' conflicts with model path '" + options.model_path + "'";
-            return false;
-        }
-        if (pathsConflict(options.json_out, options.image_path)) {
-            error = "output path '" + options.json_out +
-                    "' conflicts with image path '" + options.image_path + "'";
-            return false;
-        }
-    }
-    return true;
+        return true;
+    };
+
+    return check_output(options.dump_input) && check_output(options.json_out);
 }
 
 bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
@@ -257,6 +264,10 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
             if (!take_value("--image", options.image_path)) {
                 return false;
             }
+        } else if (option == "--image-dir") {
+            if (!take_value("--image-dir", options.image_dir)) {
+                return false;
+            }
         } else if (option == "--json-out") {
             if (!take_value("--json-out", options.json_out)) {
                 return false;
@@ -291,15 +302,31 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
     if (options.show_help || options.show_version) {
         return true;
     }
-    if (options.model_path.empty() != options.image_path.empty()) {
-        error = "both --model and --image are required for inference";
+
+    const bool has_single_image = !options.image_path.empty();
+    const bool has_image_dir = !options.image_dir.empty();
+    if (has_single_image && has_image_dir) {
+        error = "--image and --image-dir are mutually exclusive";
         return false;
     }
     if (options.model_path.empty()) {
-        if (!options.json_out.empty() || !options.dump_input.empty()) {
-            error = "--json-out/--dump-input require --model and --image";
+        if (has_single_image || has_image_dir) {
+            error = "--model is required for inference";
             return false;
         }
+        if (!options.json_out.empty() || !options.dump_input.empty()) {
+            error = "--json-out/--dump-input require --model and an image input";
+            return false;
+        }
+        return true;
+    }
+    if (!has_single_image && !has_image_dir) {
+        error = "one of --image or --image-dir is required";
+        return false;
+    }
+    if (has_image_dir && !options.dump_input.empty()) {
+        error = "--dump-input is only supported with --image";
+        return false;
     }
     return true;
 }
@@ -379,6 +406,7 @@ bool writeJsonResult(
     float max_value,
     const edge_ai::PostprocessOptions& options,
     const edge_ai::PostprocessResult& result,
+    const edge_ai::QualityResult& quality,
     const std::string& image_path,
     std::string& error)
 {
@@ -435,6 +463,12 @@ bool writeJsonResult(
     os << "  \"thresholds\": {\"conf\": " << std::setprecision(6)
        << options.conf_threshold << ", \"iou\": " << options.iou_threshold
        << "},\n";
+    os << "  \"quality\": {\"status\": \""
+       << edge_ai::qualityLabel(quality.is_ng) << "\", \"is_ng\": "
+       << (quality.is_ng ? "true" : "false")
+       << ", \"confidence_threshold\": " << quality.confidence_threshold
+       << ", \"total_detections\": " << quality.total_detections
+       << ", \"qualifying_defects\": " << quality.defects.size() << "},\n";
     os << std::setprecision(9);
     os << "  \"image\": {\n";
     os << "    \"path\": \"" << jsonEscape(image_path) << "\",\n";
@@ -511,13 +545,139 @@ bool writeInputTensor(
     return true;
 }
 
-int runInference(const Options& options)
+void printModelInfo(const edge_ai::ModelInfo& info)
+{
+    std::cout << "ONNX Runtime " << info.ort_version
+              << " providers=CPUExecutionProvider\n";
+    std::cout << "model: " << info.path << "\n";
+    std::cout << "model sha256: " << info.sha256 << "\n";
+    std::cout << "input:  " << info.input_name << " ";
+    writeShape(std::cout, info.input_shape);
+    std::cout << " " << info.input_type << "\n";
+    std::cout << "output: " << info.output_name << " ";
+    writeShape(std::cout, info.output_shape);
+    std::cout << " " << info.output_type << "\n";
+    std::cout << "classes: ";
+    bool first_class = true;
+    for (const auto& entry : info.class_names) {
+        if (!first_class) {
+            std::cout << ", ";
+        }
+        first_class = false;
+        std::cout << entry.first << "=" << entry.second;
+    }
+    std::cout << "\n";
+}
+
+bool writeBatchJson(
+    const std::string& path,
+    const edge_ai::ModelInfo& info,
+    const edge_ai::PostprocessOptions& options,
+    const edge_ai::BatchResult& batch,
+    std::string& error)
+{
+    if (!ensureParentDirectory(path, error)) {
+        return false;
+    }
+
+    std::ostringstream os;
+    os << std::setprecision(9);
+    os << "{\n";
+    os << "  \"model\": {\n";
+    os << "    \"path\": \"" << jsonEscape(info.path) << "\",\n";
+    os << "    \"sha256\": \"" << jsonEscape(info.sha256) << "\",\n";
+    os << "    \"ort_version\": \"" << jsonEscape(info.ort_version) << "\",\n";
+    os << "    \"providers\": [";
+    for (std::size_t i = 0; i < info.providers.size(); ++i) {
+        if (i != 0) {
+            os << ", ";
+        }
+        os << "\"" << jsonEscape(info.providers[i]) << "\"";
+    }
+    os << "]\n";
+    os << "  },\n";
+    os << "  \"thresholds\": {\"conf\": " << std::setprecision(6)
+       << options.conf_threshold << ", \"iou\": " << options.iou_threshold
+       << "},\n";
+    os << std::setprecision(9);
+    os << "  \"quality_rule\": \"NG if at least one detection has confidence > threshold\",\n";
+    os << "  \"frames\": [";
+    for (std::size_t i = 0; i < batch.frames.size(); ++i) {
+        const edge_ai::FrameResult& frame = batch.frames[i];
+        const char* status =
+            frame.error.empty() ? (frame.quality.is_ng ? "NG" : "OK") : "ERROR";
+        if (i != 0) {
+            os << ",";
+        }
+        os << "\n    {\n";
+        os << "      \"source\": \"" << jsonEscape(frame.source) << "\",\n";
+        os << "      \"status\": \"" << status << "\",\n";
+        os << "      \"error\": \"" << jsonEscape(frame.error) << "\",\n";
+        os << "      \"width\": " << frame.width << ",\n";
+        os << "      \"height\": " << frame.height << ",\n";
+        os << "      \"letterbox\": {\"ratio\": " << frame.letterbox.ratio
+           << ", \"pad_left\": " << frame.letterbox.pad_left
+           << ", \"pad_top\": " << frame.letterbox.pad_top << "},\n";
+        os << "      \"detections\": [";
+        for (std::size_t j = 0; j < frame.detections.size(); ++j) {
+            const auto& detection = frame.detections[j];
+            if (j != 0) {
+                os << ", ";
+            }
+            os << "{\"class_id\": " << detection.class_id
+               << ", \"class_name\": \"" << jsonEscape(detection.class_name)
+               << "\", \"confidence\": " << detection.confidence
+               << ", \"bbox_xyxy\": [" << detection.x1 << ", "
+               << detection.y1 << ", " << detection.x2 << ", "
+               << detection.y2 << "]}";
+        }
+        os << "],\n";
+        os << "      \"anomalies\": [";
+        for (std::size_t j = 0; j < frame.anomalies.size(); ++j) {
+            if (j != 0) {
+                os << ", ";
+            }
+            os << "\"" << jsonEscape(frame.anomalies[j]) << "\"";
+        }
+        os << "],\n";
+        os << "      \"quality\": {\"status\": \"" << status
+           << "\", \"is_ng\": " << (frame.quality.is_ng ? "true" : "false")
+           << ", \"confidence_threshold\": " << options.conf_threshold
+           << ", \"total_detections\": " << frame.quality.total_detections
+           << ", \"qualifying_defects\": " << frame.quality.defects.size()
+           << "}\n";
+        os << "    }";
+    }
+    if (!batch.frames.empty()) {
+        os << "\n  ";
+    }
+    os << "],\n";
+    os << "  \"summary\": {\"total\": " << batch.frames.size()
+       << ", \"ok\": " << batch.ok_count << ", \"ng\": " << batch.ng_count
+       << ", \"errors\": " << batch.error_count
+       << ", \"skipped_unsupported\": " << batch.skipped_unsupported << "}\n";
+    os << "}\n";
+
+    std::ofstream output(path, std::ios::binary);
+    if (!output) {
+        error = "cannot open JSON output: " + path;
+        return false;
+    }
+    output << os.str();
+    if (!output) {
+        error = "failed to write JSON output: " + path;
+        return false;
+    }
+    return true;
+}
+
+int runSingleImage(const Options& options)
 {
     std::string error;
-    std::string path_error;
-    if (!validateOutputPaths(options, path_error)) {
-        std::cerr << kProgram << ": " << path_error << "\n";
-        return 2;
+    edge_ai::SingleImageSource source(options.image_path, error);
+    if (!error.empty()) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
     }
 
     const auto runner = edge_ai::ModelRunner::load(options.model_path, error);
@@ -526,16 +686,20 @@ int runInference(const Options& options)
         return 1;
     }
 
-    cv::Mat image = cv::imread(options.image_path, cv::IMREAD_COLOR);
-    if (image.empty()) {
-        std::cerr << kProgram << ": failed to read image: "
-                  << options.image_path << "\n";
+    edge_ai::Frame frame;
+    std::string source_error;
+    const edge_ai::SourceStatus status = source.next(frame, source_error);
+    if (status != edge_ai::SourceStatus::Frame) {
+        std::cerr << kProgram << ": "
+                  << (source_error.empty() ? "no image available"
+                                           : source_error)
+                  << "\n";
         return 1;
     }
 
     edge_ai::PreprocessedInput input;
     try {
-        input = runner->preprocess(image);
+        input = runner->preprocess(frame.image);
     } catch (const std::exception& exception) {
         std::cerr << kProgram << ": preprocessing failed: "
                   << exception.what() << "\n";
@@ -562,29 +726,18 @@ int runInference(const Options& options)
         return 1;
     }
 
-    const edge_ai::ModelInfo& info = runner->info();
-    std::cout << "ONNX Runtime " << info.ort_version
-              << " providers=CPUExecutionProvider\n";
-    std::cout << "model: " << info.path << "\n";
-    std::cout << "model sha256: " << info.sha256 << "\n";
-    std::cout << "input:  " << info.input_name << " ";
-    writeShape(std::cout, info.input_shape);
-    std::cout << " " << info.input_type << "\n";
-    std::cout << "output: " << info.output_name << " ";
-    writeShape(std::cout, info.output_shape);
-    std::cout << " " << info.output_type << "\n";
-    std::cout << "classes: ";
-    bool first_class = true;
-    for (const auto& entry : info.class_names) {
-        if (!first_class) {
-            std::cout << ", ";
-        }
-        first_class = false;
-        std::cout << entry.first << "=" << entry.second;
+    edge_ai::QualityResult quality;
+    std::string quality_error;
+    if (!edge_ai::evaluateQuality(result.detections, options.conf_threshold,
+                                  quality, quality_error)) {
+        std::cerr << kProgram << ": " << quality_error << "\n";
+        return 1;
     }
-    std::cout << "\n";
-    std::cout << "image: " << options.image_path << " "
-              << image.cols << "x" << image.rows << "\n";
+
+    const edge_ai::ModelInfo& info = runner->info();
+    printModelInfo(info);
+    std::cout << "image: " << frame.source << " "
+              << frame.image.cols << "x" << frame.image.rows << "\n";
     std::cout << "preprocess: letterbox ratio="
               << input.letterbox.ratio
               << " pad=(" << input.letterbox.pad_left << ","
@@ -603,19 +756,102 @@ int runInference(const Options& options)
                   << detection.y1 << ", " << detection.x2 << ", "
                   << detection.y2 << "]\n";
     }
+    std::cout << "quality: " << edge_ai::qualityLabel(quality.is_ng)
+              << " (confidence>" << options.conf_threshold
+              << ", qualifying=" << quality.defects.size() << "/"
+              << quality.total_detections << ")\n";
     for (const auto& anomaly : result.anomalies) {
         std::cerr << "warning: " << anomaly << "\n";
     }
 
     if (!options.json_out.empty() &&
         !writeJsonResult(options.json_out, info, input, min_value, max_value,
-                         postprocess_options, result, options.image_path,
+                         postprocess_options, result, quality, frame.source,
                          error)) {
         std::cerr << kProgram << ": " << error << "\n";
         return 1;
     }
 
     return 0;
+}
+
+int runBatch(const Options& options)
+{
+    std::string error;
+    edge_ai::DirectoryImageSource source(options.image_dir, error);
+    if (!error.empty()) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    const auto runner = edge_ai::ModelRunner::load(options.model_path, error);
+    if (!runner) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    const edge_ai::PostprocessOptions postprocess_options{
+        options.conf_threshold, options.iou_threshold};
+    edge_ai::BatchResult batch;
+    std::string fatal_error;
+    if (!edge_ai::processFrames(source, *runner, postprocess_options, batch,
+                                fatal_error)) {
+        std::cerr << kProgram << ": " << fatal_error << "\n";
+        return 1;
+    }
+
+    printModelInfo(runner->info());
+    std::cout << "batch input: " << options.image_dir << "\n";
+    std::cout << "quality rule: NG if at least one detection has confidence > "
+              << options.conf_threshold << "\n";
+    for (const auto& frame : batch.frames) {
+        if (!frame.error.empty()) {
+            std::cout << "[ERROR] " << frame.source << ": " << frame.error
+                      << "\n";
+        } else {
+            std::cout << "[" << edge_ai::qualityLabel(frame.quality.is_ng)
+                      << "] " << frame.source
+                      << " detections=" << frame.detections.size() << "\n";
+        }
+        for (const auto& anomaly : frame.anomalies) {
+            std::cerr << "warning: " << frame.source << ": " << anomaly
+                      << "\n";
+        }
+    }
+    std::cout << "summary: total=" << batch.frames.size()
+              << " ok=" << batch.ok_count << " ng=" << batch.ng_count
+              << " errors=" << batch.error_count
+              << " skipped_unsupported=" << batch.skipped_unsupported << "\n";
+
+    if (!options.json_out.empty() &&
+        !writeBatchJson(options.json_out, runner->info(), postprocess_options,
+                        batch, error)) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    return batch.error_count == 0 ? 0 : 1;
+}
+
+int runInference(const Options& options)
+{
+    std::vector<std::string> input_images;
+    if (!options.image_dir.empty()) {
+        input_images = edge_ai::listSupportedImageFiles(options.image_dir);
+    } else {
+        input_images.push_back(options.image_path);
+    }
+
+    std::string path_error;
+    if (!validateOutputPaths(options, input_images, path_error)) {
+        std::cerr << kProgram << ": " << path_error << "\n";
+        return 2;
+    }
+
+    if (!options.image_dir.empty()) {
+        return runBatch(options);
+    }
+    return runSingleImage(options);
 }
 
 }  // namespace

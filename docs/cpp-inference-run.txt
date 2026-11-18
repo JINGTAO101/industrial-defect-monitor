@@ -1,4 +1,4 @@
-# C++ single-image inference run log
+# Full C++ verification run log (tasks 2B and 3)
 # Date: 2026-11-18
 # Host: Ubuntu 24.04.5 LTS, x86_64, 4 vCPU, CPU only
 # Toolchain: GCC/G++ 13.3.0; CMake 3.28.3; OpenCV 4.6.0; OpenSSL 3.0.13
@@ -21,63 +21,84 @@ $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$O
 -- Build files have been written to: $REPO_ROOT/build
 
 $ cmake --build build
-[1/13] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
-[2/13] Linking CXX static library libsystem_info.a
-[3/13] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
-[4/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
-[5/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
-[6/13] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
-[7/13] Linking CXX static library libedge_ai_core.a
-[8/13] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
-[9/13] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
-[10/13] Linking CXX executable bin/edge_ai_tests
-[11/13] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
-[12/13] Linking CXX static library libedge_ai_inference.a
-[13/13] Linking CXX executable bin/edge_ai
+[1/16] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
+[2/16] Linking CXX static library libsystem_info.a
+[3/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
+[4/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/quality.cpp.o
+[5/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
+[6/16] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
+[7/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_source.cpp.o
+[8/16] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
+[9/16] Linking CXX static library libedge_ai_core.a
+[10/16] Building CXX object CMakeFiles/edge_ai_inference.dir/src/batch_processor.cpp.o
+[11/16] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
+[12/16] Linking CXX static library libedge_ai_inference.a
+[13/16] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
+[14/16] Linking CXX executable bin/edge_ai
+[15/16] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
+[16/16] Linking CXX executable bin/edge_ai_tests
 
 $ ctest --test-dir build --output-on-failure
 Internal ctest changing into directory: $REPO_ROOT/build
 Test project $REPO_ROOT/build
       Start  1: unit_preprocess_non_square
- 1/17 Test  #1: unit_preprocess_non_square ................   Passed    0.05 sec
+ 1/26 Test  #1: unit_preprocess_non_square ................   Passed    0.10 sec
       Start  2: unit_postprocess_empty
- 2/17 Test  #2: unit_postprocess_empty ....................   Passed    0.01 sec
+ 2/26 Test  #2: unit_postprocess_empty ....................   Passed    0.06 sec
       Start  3: unit_postprocess_nms_same_class
- 3/17 Test  #3: unit_postprocess_nms_same_class ...........   Passed    0.01 sec
+ 3/26 Test  #3: unit_postprocess_nms_same_class ...........   Passed    0.06 sec
       Start  4: unit_postprocess_nms_cross_class
- 4/17 Test  #4: unit_postprocess_nms_cross_class ..........   Passed    0.01 sec
+ 4/26 Test  #4: unit_postprocess_nms_cross_class ..........   Passed    0.05 sec
       Start  5: unit_postprocess_coordinate_restore
- 5/17 Test  #5: unit_postprocess_coordinate_restore .......   Passed    0.01 sec
+ 5/26 Test  #5: unit_postprocess_coordinate_restore .......   Passed    0.06 sec
       Start  6: unit_postprocess_nonfinite
- 6/17 Test  #6: unit_postprocess_nonfinite ................   Passed    0.01 sec
+ 6/26 Test  #6: unit_postprocess_nonfinite ................   Passed    0.06 sec
       Start  7: unit_postprocess_score_range
- 7/17 Test  #7: unit_postprocess_score_range ..............   Passed    0.01 sec
+ 7/26 Test  #7: unit_postprocess_score_range ..............   Passed    0.07 sec
       Start  8: unit_postprocess_shape_mismatch
- 8/17 Test  #8: unit_postprocess_shape_mismatch ...........   Passed    0.01 sec
+ 8/26 Test  #8: unit_postprocess_shape_mismatch ...........   Passed    0.07 sec
       Start  9: unit_class_mapping_unknown
- 9/17 Test  #9: unit_class_mapping_unknown ................   Passed    0.01 sec
+ 9/26 Test  #9: unit_class_mapping_unknown ................   Passed    0.06 sec
       Start 10: unit_contract_validation
-10/17 Test #10: unit_contract_validation ..................   Passed    0.01 sec
+10/26 Test #10: unit_contract_validation ..................   Passed    0.06 sec
       Start 11: unit_class_metadata_parser
-11/17 Test #11: unit_class_metadata_parser ................   Passed    0.01 sec
-      Start 12: cli_behavior
-12/17 Test #12: cli_behavior ..............................   Passed    1.21 sec
-      Start 13: cli_inference_failures
-13/17 Test #13: cli_inference_failures ....................   Passed    0.76 sec
-      Start 14: cli_empty_detections
-14/17 Test #14: cli_empty_detections ......................   Passed    0.16 sec
-      Start 15: cli_path_conflicts
-15/17 Test #15: cli_path_conflicts ........................   Passed    0.81 sec
-      Start 16: cpp_reference_comparison
-16/17 Test #16: cpp_reference_comparison ..................   Passed    6.31 sec
-      Start 17: cpp_reference_rejects_incomplete_inputs
-17/17 Test #17: cpp_reference_rejects_incomplete_inputs ...   Passed    0.64 sec
+11/26 Test #11: unit_class_metadata_parser ................   Passed    0.05 sec
+      Start 12: unit_quality_no_defects
+12/26 Test #12: unit_quality_no_defects ...................   Passed    0.06 sec
+      Start 13: unit_quality_single_defect
+13/26 Test #13: unit_quality_single_defect ................   Passed    0.06 sec
+      Start 14: unit_quality_below_threshold
+14/26 Test #14: unit_quality_below_threshold ..............   Passed    0.06 sec
+      Start 15: unit_quality_multiple_defects
+15/26 Test #15: unit_quality_multiple_defects .............   Passed    0.06 sec
+      Start 16: unit_quality_boundary
+16/26 Test #16: unit_quality_boundary .....................   Passed    0.05 sec
+      Start 17: unit_quality_invalid_threshold
+17/26 Test #17: unit_quality_invalid_threshold ............   Passed    0.06 sec
+      Start 18: unit_image_source_single
+18/26 Test #18: unit_image_source_single ..................   Passed    0.06 sec
+      Start 19: unit_image_source_directory
+19/26 Test #19: unit_image_source_directory ...............   Passed    0.06 sec
+      Start 20: cli_behavior
+20/26 Test #20: cli_behavior ..............................   Passed    2.11 sec
+      Start 21: cli_inference_failures
+21/26 Test #21: cli_inference_failures ....................   Passed    2.83 sec
+      Start 22: cli_empty_detections
+22/26 Test #22: cli_empty_detections ......................   Passed    0.33 sec
+      Start 23: cli_path_conflicts
+23/26 Test #23: cli_path_conflicts ........................   Passed    1.03 sec
+      Start 24: cli_batch
+24/26 Test #24: cli_batch .................................   Passed    1.34 sec
+      Start 25: cpp_reference_comparison
+25/26 Test #25: cpp_reference_comparison ..................   Passed    3.03 sec
+      Start 26: cpp_reference_rejects_incomplete_inputs
+26/26 Test #26: cpp_reference_rejects_incomplete_inputs ...   Passed    0.38 sec
 
-100% tests passed, 0 tests failed out of 17
+100% tests passed, 0 tests failed out of 26
 
-Total Test time (real) =  10.08 sec
+Total Test time (real) =  12.21 sec
 
-$ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image "$MODEL_DIR/test-images/crazing_101.jpg" --conf 0.25 --iou 0.45 --json-out build/verification/primary.json --dump-input build/verification/primary.bin
+$ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image "$MODEL_DIR/test-images/crazing_101.jpg" --conf 0.25 --iou 0.45 --json-out build/verification/task3-single.json
 ONNX Runtime 1.32.0 providers=CPUExecutionProvider
 model: $MODEL_DIR/neu_det_yolov8n_best.onnx
 model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
@@ -91,7 +112,61 @@ thresholds: conf>0.25 iou=0.45
 detections: 2
   class_id=0 crazing conf=0.525822 bbox_xyxy=[48.0117, 37.2517, 195.252, 94.7151]
   class_id=0 crazing conf=0.484310 bbox_xyxy=[4.31551, 108.104, 180.438, 199.272]
+quality: NG (confidence>0.25, qualifying=2/2)
 
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/non_square_320x200.png
+ONNX Runtime 1.32.0 providers=CPUExecutionProvider
+model: tests/fixtures/zero_output.onnx
+model sha256: 22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697
+input:  images [1, 3, 640, 640] tensor(float)
+output: output0 [1, 10, 8400] tensor(float)
+classes: 0=crazing, 1=inclusion, 2=patches, 3=pitted_surface, 4=rolled-in_scale, 5=scratches
+image: tests/fixtures/non_square_320x200.png 320x200
+preprocess: letterbox ratio=2 pad=(0,120) BGR /255 NCHW
+input tensor: [1, 3, 640, 640] float32 min=0 max=1
+thresholds: conf>0.25 iou=0.45
+detections: 0
+quality: OK (confidence>0.25, qualifying=0/0)
+
+$ ./build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image-dir build/cli-batch-tests/real-batch --conf 0.25 --iou 0.45 --json-out build/verification/task3-batch.json
+ONNX Runtime 1.32.0 providers=CPUExecutionProvider
+model: $MODEL_DIR/neu_det_yolov8n_best.onnx
+model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+input:  images [1, 3, 640, 640] tensor(float)
+output: output0 [1, 10, 8400] tensor(float)
+classes: 0=crazing, 1=inclusion, 2=patches, 3=pitted_surface, 4=rolled-in_scale, 5=scratches
+batch input: build/cli-batch-tests/real-batch
+quality rule: NG if at least one detection has confidence > 0.25
+[NG] build/cli-batch-tests/real-batch/crazing_101.jpg detections=2
+[NG] build/cli-batch-tests/real-batch/inclusion_1.jpg detections=4
+[NG] build/cli-batch-tests/real-batch/patches_1.jpg detections=3
+[NG] build/cli-batch-tests/real-batch/pitted_surface_1.jpg detections=2
+[NG] build/cli-batch-tests/real-batch/rolled-in_scale_1.jpg detections=2
+[NG] build/cli-batch-tests/real-batch/scratches_1.jpg detections=2
+summary: total=6 ok=0 ng=6 errors=0 skipped_unsupported=0
+
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image-dir build/cli-batch-tests/mixed --json-out build/verification/task3-mixed.json
+ONNX Runtime 1.32.0 providers=CPUExecutionProvider
+model: tests/fixtures/zero_output.onnx
+model sha256: 22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697
+input:  images [1, 3, 640, 640] tensor(float)
+output: output0 [1, 10, 8400] tensor(float)
+classes: 0=crazing, 1=inclusion, 2=patches, 3=pitted_surface, 4=rolled-in_scale, 5=scratches
+batch input: build/cli-batch-tests/mixed
+quality rule: NG if at least one detection has confidence > 0.25
+[ERROR] build/cli-batch-tests/mixed/bad.jpg: failed to read image: build/cli-batch-tests/mixed/bad.jpg
+[OK] build/cli-batch-tests/mixed/valid.png detections=0
+summary: total=2 ok=1 ng=0 errors=1 skipped_unsupported=1
+
+# Invalid configuration
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/non_square_320x200.png --conf 1.1
+edge_ai: --conf must be in (0, 1], got 1.1
+Try 'edge_ai --help' for more information.
+# exit code: 2
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image-dir build/cli-batch-tests/valid --dump-input /tmp/should-not-exist.bin
+edge_ai: --dump-input is only supported with --image
+Try 'edge_ai --help' for more information.
+# exit code: 2
 # Failure paths
 $ ./build/bin/edge_ai --model /tmp/does-not-exist.onnx --image tests/fixtures/non_square_320x200.png
 edge_ai: model file not found: /tmp/does-not-exist.onnx
@@ -109,31 +184,14 @@ $ ./build/bin/edge_ai --model tests/fixtures/wrong_output.onnx --image tests/fix
 edge_ai: model contract mismatch: output shape mismatch: expected [1, 10, 8400], got [1, 10, 100]
 # exit code: 1
 
-$ ./build/bin/edge_ai --model $MODEL_DIR/neu_det_yolov8n_best.onnx --image tests/fixtures/corrupt_model.bin
-edge_ai: failed to read image: tests/fixtures/corrupt_model.bin
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image build/cli-tests/corrupt.jpg
+edge_ai: failed to read image: build/cli-tests/corrupt.jpg
 # exit code: 1
 
-# Argument parsing
-$ ./build/bin/edge_ai --help --model --bogus
-edge_ai: missing value for --model (use --model=<value> when the value starts with '-')
-Try 'edge_ai --help' for more information.
-# exit code: 2 (stdout is empty; help is not shown)
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx --image tests/fixtures/corrupt_model.bin
+edge_ai: unsupported image extension: tests/fixtures/corrupt_model.bin
+# exit code: 1
 
-$ ./build/bin/edge_ai --model=--bogus --image=tests/fixtures/non_square_320x200.png
-edge_ai: model file not found: --bogus
-# exit code: 1 (leading-dash value passed via --option=value)
-# Output path conflicts (including a dangling symlink target)
-$ sha256sum $TEST_DIR/zero_output.onnx (before)
-22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697  $REPO_ROOT/build/path-conflict-tests/zero_output.onnx
-$ ./build/bin/edge_ai --model $TEST_DIR/zero_output.onnx --image $TEST_DIR/non_square_320x200.png --json-out $TEST_DIR/zero_output.onnx
-edge_ai: output path '$REPO_ROOT/build/path-conflict-tests/zero_output.onnx' conflicts with model path '$REPO_ROOT/build/path-conflict-tests/zero_output.onnx'
-# exit code: 2
-$ ./build/bin/edge_ai --model $TEST_DIR/zero_output.onnx --image $TEST_DIR/non_square_320x200.png --dump-input $TEST_DIR/dangling-alias.json --json-out $TEST_DIR/dangling-result.json
-edge_ai: output paths '$REPO_ROOT/build/path-conflict-tests/dangling-alias.json' and '$REPO_ROOT/build/path-conflict-tests/dangling-result.json' refer to the same file
-# exit code: 2 (dangling symlink target)
-# dangling target exists: no
-$ sha256sum $TEST_DIR/zero_output.onnx (after)
-22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697  $REPO_ROOT/build/path-conflict-tests/zero_output.onnx
 $ "$MODEL_DIR/venv/bin/python" -I tools/compare_cpp_reference.py --edge-ai build/bin/edge_ai --model "$MODEL_DIR/neu_det_yolov8n_best.onnx" --image-dir "$MODEL_DIR/test-images" --reference-results docs/reference-inference-results.json --out-dir build/reference-comparison
 reference model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
 reference thresholds: conf=0.25 iou=0.45

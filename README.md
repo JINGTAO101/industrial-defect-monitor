@@ -6,7 +6,9 @@
   Python 参考推理；
 - **任务 2B**：基于 ONNX Runtime C++ API 和 CPU ExecutionProvider 的单图推理，
   包括模型契约校验、letterbox 预处理、类别感知 NMS、坐标还原、失败路径测试，
-  以及与 2A 参考结果的逐项对照。
+  以及与 2A 参考结果的逐项对照；
+- **任务 3**：统一 `Frame`/`ImageSource` 图片输入抽象，支持单图和目录批量，
+  实现可配置阈值与 OK/NG 判定，覆盖坏文件继续策略和输入/阈值错误测试。
 
 摄像头、多线程、SQLite、MQTT 不在当前阶段范围内。
 
@@ -95,9 +97,22 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   --conf 0.25 --iou 0.45 \
   --json-out build/verification/crazing_101.cpp.json
 
+# 目录批量推理
+./build/bin/edge_ai \
+  --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
+  --image-dir "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/test-images" \
+  --conf 0.25 --iou 0.45 \
+  --json-out build/verification/batch.json
+
 # 非法参数：stderr 报错，退出码 2
 ./build/bin/edge_ai --bogus
 ```
+
+`--image` 与 `--image-dir` 互斥；`--dump-input` 仅支持单图。支持
+`jpg/jpeg/png/bmp/tif/tiff`。批量目录中的其他扩展名文件会被跳过并在摘要中
+计数；损坏图片会记为 `[ERROR]` 后继续处理，最终退出码为 1。判定规则为：
+至少一个检测的置信度严格大于 `--conf` 时 NG，否则 OK。非法 `--conf`/`--iou`
+（0、负数、>1、NaN、Inf）明确返回 2，不会静默使用默认值。
 
 主要参数：`--model`、`--image`、`--conf`（默认 0.25）、`--iou`（默认 0.45）、
 `--json-out`、`--dump-input`。参数会先完整校验；`--help --bogus` 等组合仍会
@@ -114,27 +129,31 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 15 个测试（单元测试 + CLI 失败路径 + 空检测 +
-路径冲突）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和
-`EDGE_AI_PYTHON` 时额外运行六图对照和对照守卫测试，共 17 个。本次验证
-17/17 通过。
+不提供真实模型路径时运行 24 个测试（单元测试 + CLI 失败路径 + 空检测 +
+路径冲突 + 批量输入）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR`
+和 `EDGE_AI_PYTHON` 时额外运行六图对照和对照守卫测试，共 26 个。本次验证
+26/26 通过。
 
-`cli_inference_failures` 覆盖：
+`cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
+损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
+非有限输出、类别分数越界（>1/<0）与边界 0/1、输出尺寸错误、未知类别
+`Unknown`+anomaly、契约校验和类别 metadata 解析。
 
-- 模型文件不存在；
-- 模型损坏/无法加载；
-- 输入形状不符合已核验契约；
-- 输出形状不符合已核验契约；
-- 图片无法读取（需要真实模型）。
+任务 3 新增测试覆盖：
 
-单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、非有限输出、
-类别分数越界（>1/<0）与边界 0/1、输出尺寸错误、未知类别 `Unknown`+anomaly、
-契约校验和类别 metadata 解析。
+- 无缺陷 → OK、单缺陷 → NG、低于阈值 → OK、多缺陷 → NG；
+- 阈值边界（严格 `>`）和非法阈值（0/负数/>1/NaN/Inf）；
+- 单图正常/缺失/不支持/损坏；目录批量正常、坏文件继续、扩展名跳过、缺失/空目录；
+- 批量全 OK、坏文件继续并汇总、批量 JSON、批量输出路径冲突、`--dump-input`
+  与 `--image-dir` 组合拒绝；
+- 有真实模型时六张图批量输出 `ok=0 ng=6 errors=0`。
+
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
 指向模型、图片或彼此（含相对路径/悬空符号链接/硬链接）时被拒绝，且原文件
 SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA256 与参考一致、
-运行阈值与参考结果一致。
+运行阈值与参考结果一致。详细说明见
+[docs/input-and-quality.md](docs/input-and-quality.md)。
 
 ## 目录结构
 
@@ -144,24 +163,31 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 ├── README.md
 ├── .gitignore
 ├── include/
+│   ├── batch_processor.hpp
 │   ├── image_preprocess.hpp
+│   ├── image_source.hpp
 │   ├── model_contract.hpp
 │   ├── model_runner.hpp
 │   ├── postprocess.hpp
+│   ├── quality.hpp
 │   ├── sha256.hpp
 │   └── system_info.hpp
 ├── src/
+│   ├── batch_processor.cpp
 │   ├── image_preprocess.cpp
+│   ├── image_source.cpp
 │   ├── main.cpp
 │   ├── model_contract.cpp
 │   ├── model_runner.cpp
 │   ├── postprocess.cpp
+│   ├── quality.cpp
 │   ├── sha256.cpp
 │   └── system_info.cpp
 ├── docs/
 │   ├── model-verification.md          # 2A 模型来源/许可/接口/参考推理
 │   ├── cpp-inference.md               # 2B C++ 推理与对照记录
 │   ├── cpp-inference-run.txt          # 2B 干净构建/CTest/推理/失败路径运行日志
+│   ├── input-and-quality.md           # 任务 3 输入抽象与 OK/NG 判定
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -176,6 +202,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_inference_tests.cmake
     ├── cli_empty_detections.cmake
     ├── cli_path_conflict_tests.cmake
+    ├── cli_batch_tests.cmake
     ├── compare_reference_guard_tests.cmake
     ├── unit_tests.cpp
     └── fixtures/                      # 合成图片/契约错误 ONNX/空输出模型/损坏模型
@@ -208,7 +235,20 @@ release v1.0.0）。详细记录见 [docs/model-verification.md](docs/model-veri
   最大差 `5.960e-08`；
 - FR-007：未知 ID 返回 `Unknown` 并记录 anomaly，不会静默映射到已有类别。
 
-## 验收记录（2B）
+## 阶段 3：图片输入与 OK/NG 判定
+
+完整设计、错误策略和测试记录见
+[docs/input-and-quality.md](docs/input-and-quality.md)。关键点：
+
+- `Frame` + `ImageSource` 统一接口，`SingleImageSource`/`DirectoryImageSource`
+  两种实现；批处理只依赖接口；
+- `Detection` + `QualityResult`，`--conf` 可配置；至少一个置信度严格大于
+  阈值的检测 → NG，否则 OK；
+- 单图缺失/不支持/损坏、目录缺失/空/含坏文件均有明确行为；批量坏文件继续
+  处理、汇总错误并以退出码 1 结束；
+- 真实模型六图批量结果：`ok=0 ng=6 errors=0`。
+
+## 验收记录（2B/3）
 
 ```text
 $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -223,7 +263,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 17
+100% tests passed, 0 tests failed out of 26
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45
@@ -234,6 +274,19 @@ output: output0 [1, 10, 8400] tensor(float)
 detections: 2
   class_id=0 crazing conf=0.525822 bbox_xyxy=[48.0117, 37.2517, 195.252, 94.7151]
   class_id=0 crazing conf=0.484310 bbox_xyxy=[4.31551, 108.104, 180.438, 199.272]
+quality: NG (confidence>0.25, qualifying=2/2)
+
+$ ./build/bin/edge_ai --model ... --image-dir build/cli-batch-tests/real-batch \
+    --conf 0.25 --iou 0.45
+...
+summary: total=6 ok=0 ng=6 errors=0 skipped_unsupported=0
+
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image-dir build/cli-batch-tests/mixed
+...
+[ERROR] .../bad.jpg: failed to read image: .../bad.jpg
+[OK] .../valid.png detections=0
+summary: total=2 ok=1 ng=0 errors=1 skipped_unsupported=1
 
 $ ./build/bin/edge_ai --model /tmp/does-not-exist.onnx \
     --image tests/fixtures/non_square_320x200.png

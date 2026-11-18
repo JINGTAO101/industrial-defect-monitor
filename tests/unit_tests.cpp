@@ -1,6 +1,9 @@
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -8,8 +11,14 @@
 #include <opencv2/core.hpp>
 
 #include "image_preprocess.hpp"
+#include "image_source.hpp"
 #include "model_contract.hpp"
 #include "postprocess.hpp"
+#include "quality.hpp"
+
+#ifndef EDGE_AI_FIXTURE_DIR
+#define EDGE_AI_FIXTURE_DIR "tests/fixtures"
+#endif
 
 namespace {
 
@@ -77,6 +86,24 @@ void setPrediction(
 edge_ai::LetterboxInfo identityLetterbox()
 {
     return edge_ai::LetterboxInfo{1.0, 0, 0, 640, 640};
+}
+
+edge_ai::Detection detectionWithConfidence(float confidence)
+{
+    edge_ai::Detection detection;
+    detection.class_id = 0;
+    detection.class_name = "crazing";
+    detection.confidence = confidence;
+    detection.x1 = 10.0f;
+    detection.y1 = 10.0f;
+    detection.x2 = 20.0f;
+    detection.y2 = 20.0f;
+    return detection;
+}
+
+std::string fixturePath(const std::string& name)
+{
+    return std::string(EDGE_AI_FIXTURE_DIR) + "/" + name;
 }
 
 bool testPreprocessNonSquare(std::string& error)
@@ -344,6 +371,252 @@ bool testContractValidation(std::string& error)
     return true;
 }
 
+bool testQualityNoDefects(std::string& error)
+{
+    edge_ai::QualityResult result;
+    std::string quality_error;
+    if (!expect(edge_ai::evaluateQuality({}, 0.5f, result, quality_error),
+                "empty detections were rejected: " + quality_error, error)) {
+        return false;
+    }
+    return expect(!result.is_ng, "empty detections must be OK", error) &&
+           expect(result.defects.empty(), "OK result has defects", error) &&
+           expect(result.total_detections == 0,
+                  "OK result has a non-zero detection count", error);
+}
+
+bool testQualitySingleDefect(std::string& error)
+{
+    edge_ai::QualityResult result;
+    std::string quality_error;
+    if (!expect(edge_ai::evaluateQuality(
+                    {detectionWithConfidence(0.9f)}, 0.5f, result,
+                    quality_error),
+                "single defect was rejected: " + quality_error, error)) {
+        return false;
+    }
+    return expect(result.is_ng, "single qualifying defect must be NG", error) &&
+           expect(result.defects.size() == 1,
+                  "NG result must contain the qualifying defect", error);
+}
+
+bool testQualityBelowThreshold(std::string& error)
+{
+    edge_ai::QualityResult result;
+    std::string quality_error;
+    if (!expect(edge_ai::evaluateQuality(
+                    {detectionWithConfidence(0.4f)}, 0.5f, result,
+                    quality_error),
+                "below-threshold detection was rejected: " + quality_error,
+                error)) {
+        return false;
+    }
+    return expect(!result.is_ng,
+                  "below-threshold detection must be OK", error) &&
+           expect(result.total_detections == 1,
+                  "below-threshold total count is wrong", error) &&
+           expect(result.defects.empty(),
+                  "below-threshold detection must not qualify", error);
+}
+
+bool testQualityMultipleDefects(std::string& error)
+{
+    edge_ai::QualityResult result;
+    std::string quality_error;
+    if (!expect(edge_ai::evaluateQuality(
+                    {detectionWithConfidence(0.9f),
+                     detectionWithConfidence(0.8f)},
+                    0.5f, result, quality_error),
+                "multiple defects were rejected: " + quality_error, error)) {
+        return false;
+    }
+    return expect(result.is_ng, "multiple qualifying defects must be NG", error) &&
+           expect(result.defects.size() == 2,
+                  "NG result must contain both qualifying defects", error);
+}
+
+bool testQualityBoundary(std::string& error)
+{
+    edge_ai::QualityResult result;
+    std::string quality_error;
+    if (!expect(edge_ai::evaluateQuality(
+                    {detectionWithConfidence(0.5f)}, 0.5f, result,
+                    quality_error),
+                "boundary detection was rejected: " + quality_error, error)) {
+        return false;
+    }
+    return expect(!result.is_ng,
+                  "confidence exactly at threshold must be OK (strict >)", error) &&
+           expect(result.defects.empty(),
+                  "boundary detection must not qualify", error);
+}
+
+bool testQualityInvalidThreshold(std::string& error)
+{
+    const std::vector<float> invalid = {
+        0.0f, -0.1f, 1.1f, std::nanf(""),
+        std::numeric_limits<float>::infinity()};
+    for (const float threshold : invalid) {
+        edge_ai::QualityResult result;
+        std::string quality_error;
+        if (!expect(!edge_ai::evaluateQuality(
+                        {detectionWithConfidence(0.9f)}, threshold, result,
+                        quality_error),
+                    "invalid threshold was accepted: " +
+                        std::to_string(threshold),
+                    error) ||
+            !expect(quality_error.find("threshold") != std::string::npos,
+                    "invalid threshold error is not diagnostic: " +
+                        quality_error,
+                    error) ||
+            !expect(!result.is_ng && result.defects.empty(),
+                    "invalid threshold produced a decision", error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testImageSourceSingle(std::string& error)
+{
+    std::string source_error;
+    edge_ai::SingleImageSource valid(
+        fixturePath("non_square_320x200.png"), source_error);
+    if (!expect(source_error.empty(),
+                "valid single source rejected: " + source_error, error)) {
+        return false;
+    }
+    edge_ai::Frame frame;
+    if (!expect(valid.next(frame, source_error) ==
+                    edge_ai::SourceStatus::Frame,
+                "valid single source did not return a frame: " + source_error,
+                error) ||
+        !expect(!frame.image.empty() && frame.image.cols == 320,
+                "valid single source loaded the wrong image", error) ||
+        !expect(valid.next(frame, source_error) == edge_ai::SourceStatus::End,
+                "valid single source did not end", error)) {
+        return false;
+    }
+
+    edge_ai::SingleImageSource missing(
+        "/tmp/edge_ai_task3_does_not_exist.png", source_error);
+    if (!expect(!source_error.empty() &&
+                    source_error.find("not found") != std::string::npos,
+                "missing image was not rejected: " + source_error, error)) {
+        return false;
+    }
+
+    edge_ai::SingleImageSource unsupported(
+        fixturePath("README.md"), source_error);
+    if (!expect(!source_error.empty() &&
+                    source_error.find("unsupported") != std::string::npos,
+                "unsupported extension was not rejected: " + source_error,
+                error)) {
+        return false;
+    }
+
+    const std::filesystem::path corrupt_path =
+        std::filesystem::temp_directory_path() /
+        "edge_ai_task3_corrupt.jpg";
+    {
+        std::ofstream corrupt(corrupt_path, std::ios::binary);
+        corrupt << "not an image";
+    }
+    edge_ai::SingleImageSource corrupt(corrupt_path.string(), source_error);
+    if (!expect(source_error.empty(),
+                "corrupt file was rejected too early: " + source_error,
+                error)) {
+        std::filesystem::remove(corrupt_path);
+        return false;
+    }
+    const edge_ai::SourceStatus corrupt_status =
+        corrupt.next(frame, source_error);
+    const bool corrupt_ok =
+        expect(corrupt_status == edge_ai::SourceStatus::Error,
+               "corrupt image did not return Error", error) &&
+        expect(source_error.find("failed to read image") != std::string::npos,
+               "corrupt image error is not diagnostic: " + source_error,
+               error) &&
+        expect(corrupt.next(frame, source_error) == edge_ai::SourceStatus::End,
+               "corrupt single source did not end", error);
+    std::filesystem::remove(corrupt_path);
+    return corrupt_ok;
+}
+
+bool testImageSourceDirectory(std::string& error)
+{
+    const std::filesystem::path test_dir =
+        std::filesystem::temp_directory_path() /
+        "edge_ai_task3_source_dir";
+    std::error_code filesystem_error;
+    std::filesystem::remove_all(test_dir, filesystem_error);
+    std::filesystem::create_directories(test_dir, filesystem_error);
+    std::filesystem::copy_file(
+        fixturePath("non_square_320x200.png"), test_dir / "a.png",
+        std::filesystem::copy_options::overwrite_existing, filesystem_error);
+    {
+        std::ofstream corrupt(test_dir / "b.jpg", std::ios::binary);
+        corrupt << "not an image";
+    }
+    {
+        std::ofstream unsupported(test_dir / "c.txt", std::ios::binary);
+        unsupported << "ignored";
+    }
+
+    std::string source_error;
+    edge_ai::DirectoryImageSource source(test_dir.string(), source_error);
+    if (!expect(source_error.empty(),
+                "valid directory source rejected: " + source_error, error) ||
+        !expect(source.skippedUnsupported() == 1,
+                "directory source did not count the unsupported file", error)) {
+        std::filesystem::remove_all(test_dir);
+        return false;
+    }
+
+    edge_ai::Frame frame;
+    if (!expect(source.next(frame, source_error) ==
+                    edge_ai::SourceStatus::Frame,
+                "directory source did not return the valid frame: " +
+                    source_error,
+                error) ||
+        !expect(frame.source.find("a.png") != std::string::npos,
+                "directory source returned the wrong order", error) ||
+        !expect(source.next(frame, source_error) ==
+                    edge_ai::SourceStatus::Error,
+                "directory source did not report the corrupt frame", error) ||
+        !expect(source_error.find("failed to read image") != std::string::npos,
+                "directory corrupt error is not diagnostic: " + source_error,
+                error) ||
+        !expect(source.next(frame, source_error) == edge_ai::SourceStatus::End,
+                "directory source did not continue to End after a bad file",
+                error)) {
+        std::filesystem::remove_all(test_dir);
+        return false;
+    }
+    std::filesystem::remove_all(test_dir);
+
+    edge_ai::DirectoryImageSource missing(
+        (std::filesystem::temp_directory_path() /
+         "edge_ai_task3_missing_dir").string(),
+        source_error);
+    if (!expect(!source_error.empty() &&
+                    source_error.find("not found") != std::string::npos,
+                "missing directory was not rejected: " + source_error, error)) {
+        return false;
+    }
+
+    const std::filesystem::path empty_dir =
+        std::filesystem::temp_directory_path() / "edge_ai_task3_empty_dir";
+    std::filesystem::remove_all(empty_dir, filesystem_error);
+    std::filesystem::create_directories(empty_dir, filesystem_error);
+    edge_ai::DirectoryImageSource empty(empty_dir.string(), source_error);
+    std::filesystem::remove_all(empty_dir);
+    return expect(!source_error.empty() &&
+                      source_error.find("no supported images") !=
+                          std::string::npos,
+                  "empty directory was not rejected: " + source_error, error);
+}
+
 bool testClassMetadataParser(std::string& error)
 {
     std::map<int, std::string> names;
@@ -388,6 +661,14 @@ int main(int argc, char* argv[])
         {"class_mapping_unknown", testClassMappingUnknown},
         {"contract_validation", testContractValidation},
         {"class_metadata_parser", testClassMetadataParser},
+        {"quality_no_defects", testQualityNoDefects},
+        {"quality_single_defect", testQualitySingleDefect},
+        {"quality_below_threshold", testQualityBelowThreshold},
+        {"quality_multiple_defects", testQualityMultipleDefects},
+        {"quality_boundary", testQualityBoundary},
+        {"quality_invalid_threshold", testQualityInvalidThreshold},
+        {"image_source_single", testImageSourceSingle},
+        {"image_source_directory", testImageSourceDirectory},
     };
 
     std::string filter;
