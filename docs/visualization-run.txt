@@ -1,0 +1,105 @@
+# Task 5C visualization verification log
+# Date: 2026-11-19
+# Host: Ubuntu 24.04.5 LTS, x86_64
+# OpenCV 4.6.0 Qt highgui, QT_QPA_PLATFORM=offscreen for headless display tests
+# No USB camera passthrough; vivid virtual device used. AT-009 remains pending.
+# Model sha256=495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+
+# ---- Headless single-image save (no DISPLAY) ----
+
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png \
+    --save-annotated build/cli-annotation-tests/annotated.png
+...
+annotated image saved: build/cli-annotation-tests/annotated.png
+# exit code: 0
+
+$ file build/cli-annotation-tests/annotated.png
+build/cli-annotation-tests/annotated.png: PNG image data, 320 x 200, 8-bit/color RGB, non-interlaced
+
+$ ctest --test-dir build -R cli_annotation --output-on-failure
+1/1 Test #65: cli_annotation ...........................   Passed    0.76 sec
+100% tests passed, 0 tests failed out of 1
+
+# Headless --display guard (Qt must not abort):
+$ env -u DISPLAY -u WAYLAND_DISPLAY -u QT_QPA_PLATFORM \
+    ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png --display
+edge_ai: --display requires DISPLAY/WAYLAND_DISPLAY or QT_QPA_PLATFORM=offscreen;
+use --save-annotated for headless single-image output
+# exit code: 1
+
+# ---- Non-square real-model annotation ----
+
+$ ./build/bin/edge_ai --model ... --image docs/evidence/synthetic-non-square.png \
+    --save-annotated docs/evidence/annotated-non-square.png \
+    --json-out build/synthetic-annotation.json
+image: docs/evidence/synthetic-non-square.png 480x200
+preprocess: letterbox ratio=1.33333 pad=(0,187) BGR /255 NCHW
+detections: 2
+  class_id=3 pitted_surface conf=0.621675 bbox_xyxy=[0, 0, 190.117, 199.114]
+  class_id=5 scratches conf=0.264694 bbox_xyxy=[315.195, 166.302, 376.593, 185.851]
+quality: NG (confidence>0.25, qualifying=2/2)
+annotated image saved: docs/evidence/annotated-non-square.png
+# exit code: 0
+
+$ file docs/evidence/annotated-non-square.png
+PNG image data, 480 x 200, 8-bit/color RGB, non-interlaced
+
+# Border pixels checked against JSON bboxes (left/right/top/bottom midpoints):
+pitted_surface (0, 0, 190, 199) edge (0, 99) (0, 0, 255)
+pitted_surface (0, 0, 190, 199) edge (189, 99) (0, 0, 255)
+pitted_surface (0, 0, 190, 199) edge (95, 0) (0, 0, 255)
+pitted_surface (0, 0, 190, 199) edge (95, 198) (0, 0, 255)
+scratches (315, 166, 377, 186) edge (315, 176) (0, 0, 255)
+scratches (315, 166, 377, 186) edge (376, 176) (0, 0, 255)
+scratches (315, 166, 377, 186) edge (346, 166) (0, 0, 255)
+scratches (315, 166, 377, 186) edge (346, 185) (0, 0, 255)
+all borders at JSON coordinates: True
+
+# ---- Camera preview on vivid (offscreen highgui) ----
+
+$ QT_QPA_PLATFORM=offscreen timeout --preserve-status -s INT 5s \
+    ./build/bin/edge_ai --model ... --camera /dev/video0 --display \
+    --queue-capacity 1
+...
+[NG] index=52 source=/dev/video0 detections=6
+threads: reader=128518194206336 inference=128518185813632 result=128518105069184
+queues: input capacity=1 max_depth=1 producer_waits=51; result capacity=1 max_depth=1 producer_waits=0
+summary: total=53 ok=0 ng=53 errors=0 reconnect_count=0 stopped=1
+preview: submitted=53 shown=47 dropped=6 closed_by_user=0
+camera stopped; accepted frames drained
+# exit code: 0
+
+# ---- Single-image window path on offscreen highgui ----
+
+$ QT_QPA_PLATFORM=offscreen timeout 3s stdbuf -oL \
+    ./build/bin/edge_ai --model ... \
+    --image docs/evidence/synthetic-non-square.png --display
+detections: 2
+quality: NG (confidence>0.25, qualifying=2/2)
+# timeout returned 124 because the preview was still waiting for a key/close;
+# this confirms highgui display creation did not fail or abort.
+
+# ---- 5C unit tests ----
+
+$ ./build/bin/edge_ai_tests annotation_ng_boxes
+[PASS] annotation_ng_boxes
+$ ./build/bin/edge_ai_tests annotation_error_frame
+[PASS] annotation_error_frame
+$ ./build/bin/edge_ai_tests annotation_save_png
+[PASS] annotation_save_png
+$ ./build/bin/edge_ai_tests preview_drops_frames
+[PASS] preview_drops_frames
+$ ./build/bin/edge_ai_tests preview_close_stops
+[PASS] preview_close_stops
+$ ./build/bin/edge_ai_tests preview_error_stops
+[PASS] preview_error_stops
+$ ./build/bin/edge_ai_threaded_tests threaded_preview_image_included
+[PASS] threaded_preview_image_included
+
+# ---- Full suite ----
+
+$ ctest --test-dir build --output-on-failure
+100% tests passed, 0 tests failed out of 68
+# 65 tests run without external model/images.

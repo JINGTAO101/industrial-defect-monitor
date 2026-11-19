@@ -20,7 +20,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ---- 依赖 ----------------------------------------------------------------
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs dnn)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui dnn)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -83,6 +83,8 @@ add_library(edge_ai_core STATIC
     src/quality.cpp
     src/image_source.cpp
     src/camera_source.cpp
+    src/annotation.cpp
+    src/preview_window.cpp
 )
 target_include_directories(edge_ai_core
     PUBLIC
@@ -169,6 +171,7 @@ if(BUILD_TESTING)
     foreach(threaded_test
             threaded_normal_drain
             threaded_full_backpressure
+            threaded_preview_image_included
             threaded_external_stop_drains
             threaded_fatal_wakes
             threaded_start_failure_inference
@@ -232,7 +235,13 @@ if(BUILD_TESTING)
             camera_reconnect_no_frame_budget
             camera_reconnect_stop
             camera_reconnect_stop_during_open
-            camera_bad_frame_sequence)
+            camera_bad_frame_sequence
+            annotation_ng_boxes
+            annotation_error_frame
+            annotation_save_png
+            preview_drops_frames
+            preview_close_stops
+            preview_error_stops)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
     endforeach()
 
@@ -300,6 +309,16 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_signal_tests.cmake
     )
     set_tests_properties(cli_signal PROPERTIES TIMEOUT 60)
+
+    add_test(
+        NAME cli_annotation
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/cli-annotation-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_annotation_tests.cmake
+    )
+    set_tests_properties(cli_annotation PROPERTIES TIMEOUT 30)
 
     if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)
         add_test(

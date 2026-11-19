@@ -16,7 +16,10 @@
 - **任务 5A**：V4L2 `CameraSource` 单摄像头采集，支持 YUYV/MJPG 转 BGR、
   序号/时间戳、读取超时和 `--capture-only --max-frames`；真实 USB 直通待实机；
 - **任务 5B**：摄像头接入三线程检测流水线，支持逐帧结果、内存有界、Ctrl+C
-  排空、坏帧/设备失联区分和有限重连；真实摄像头 AT-009 仍待实机。
+  排空、坏帧/设备失联区分和有限重连；真实摄像头 AT-009 仍待实机；
+- **任务 5C**：单图和摄像头共用检测框/类别/置信度/OK-NG-ERROR 标注；支持
+  单图无桌面保存、单图/摄像头窗口预览，预览缓存容量 1 且慢窗口只丢预览帧；
+  关闭窗口沿用 5B 停止排空。
 
 SQLite、MQTT 不在当前阶段范围内。
 
@@ -123,6 +126,17 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   --camera /dev/video0 --queue-capacity 1 \
   --camera-reconnect-attempts 3 --camera-reconnect-interval-ms 1000
 
+# 单图标注：无桌面保存 / 窗口预览
+./build/bin/edge_ai --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
+  --image part.jpg --save-annotated build/part-annotated.png
+./build/bin/edge_ai --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
+  --image part.jpg --display
+
+# 摄像头窗口预览（关闭窗口按 5B 流程停止并排空）
+./build/bin/edge_ai \
+  --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
+  --camera /dev/video0 --display --queue-capacity 1
+
 # 非法参数：stderr 报错，退出码 2
 ./build/bin/edge_ai --bogus
 ```
@@ -150,11 +164,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 57 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 65 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
-重连/停止）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和
-`EDGE_AI_PYTHON` 时额外运行六图对照、对照守卫和线程化批量对照测试，共
-60 个。
+重连/停止 + 标注/预览/无桌面保存）；提供 `EDGE_AI_MODEL_PATH`、
+`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照、对照
+守卫和线程化批量对照测试，共 68 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -222,6 +236,16 @@ ctest --test-dir build --output-on-failure
 - `threaded_external_stop_drains`：省略帧数时连续运行，停止后只排空已接收帧；
 - `cli_signal`：图片批量模式收到 SIGINT 以 130 终止，摄像头处理器不接管。
 
+任务 5C 新增展示测试：
+
+- `annotation_ng_boxes` / `annotation_error_frame`：非正方形原图坐标不缩放，
+  ERROR 帧只画状态条不画框；
+- `annotation_save_png`：无 GUI 写 PNG 并回读尺寸/框像素；
+- `preview_drops_frames`：慢窗口只保留最新预览帧，submit 不阻塞；
+- `preview_close_stops` / `preview_error_stops`：关闭或显示失败置停止标志；
+- `threaded_preview_image_included`：预览开启时结果携带源图；
+- `cli_annotation`：无桌面保存、尺寸检查、路径冲突和 headless `--display` 守卫。
+
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
 指向模型、图片或彼此（含相对路径/悬空符号链接/硬链接）时被拒绝，且原文件
@@ -274,6 +298,11 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── v4l2-verification.txt          # 5A 干净构建、49 项测试和故障回归
 │   ├── camera-inference.md            # 任务 5B 三线程摄像头检测与重连
 │   ├── camera-inference-run.txt       # 5B vivid 30 帧、连续模式、Ctrl+C、坏帧日志
+│   ├── visualization.md               # 任务 5C 标注、预览缓存与退出语义
+│   ├── visualization-run.txt          # 5C 无桌面保存、非正方形核对、vivid 预览日志
+│   ├── evidence/
+│   │   ├── synthetic-non-square.png   # 本地生成的 480×200 合成输入
+│   │   └── annotated-non-square.png   # 对应的 NG 标注结果
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -292,6 +321,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_batch_tests.cmake
     ├── cli_camera_tests.cmake
     ├── cli_signal_tests.cmake
+    ├── cli_annotation_tests.cmake
     ├── compare_reference_guard_tests.cmake
     ├── queue_tests.cpp
     ├── threaded_pipeline_tests.cpp
@@ -383,7 +413,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 60/60（含 5B 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 68/68（含 5B/5C 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 
@@ -404,6 +434,24 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   坏帧序号和停止可打断读等待；
 - 队列容量 1 的 30 帧 vivid 检测：`total=30 ok=0 ng=30 errors=0`，两个队列
   峰值均为 1；连续模式 6 秒处理 69 帧，Ctrl+C 后 `stopped=1` 正常退出。
+
+## 任务 5C：检测结果展示
+
+详细设计、坐标核对和预览统计见
+[docs/visualization.md](docs/visualization.md)。
+
+- 单图和摄像头共用 `annotateFrame()`：原图坐标画框、类别、置信度，并显示
+  `OK`/`NG`/`ERROR`；ERROR 帧不画框、不产生质量判定；
+- 单图支持 `--save-annotated`（无桌面）和 `--display`（窗口）；
+- 摄像头 `--display` 使用独立预览线程，待显示缓存只有 1 帧；窗口慢时覆盖
+  旧预览帧并计数 `dropped`，检测结果仍逐帧输出；
+- 关闭窗口或按 Esc/Q 设置 5B 外部停止标志，读取停止后正常排空；
+- 无 `DISPLAY` 且未选择 offscreen 时，`--display` 在 highgui 前返回 1，避免
+  Qt abort；
+- 480×200 非正方形合成图实测：2 个检测框与 JSON 坐标逐边核对一致，保存图
+  仍为 480×200；vivid 预览 53 帧，`submitted=53 shown=47 dropped=6`，
+  `stopped=1` 退出码 0；
+- 5C 自动测试 8 个；完整套件 68/68，无外部资产 65 个。
 
 ## 验收记录（2B/3）
 

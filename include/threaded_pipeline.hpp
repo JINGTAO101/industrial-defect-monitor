@@ -39,6 +39,9 @@ struct PipelineOptions {
     std::size_t max_input_frames = 0;
     // Batch mode keeps all frames; camera mode disables this to bound memory.
     bool retain_frames = true;
+    // Copy the source image into each FrameResult for preview. Leave false
+    // when no preview is active so the result queue holds only metadata.
+    bool include_frame_image = false;
 };
 
 struct PipelineStats {

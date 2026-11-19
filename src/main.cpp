@@ -17,9 +17,11 @@
 
 #include <opencv2/core.hpp>
 
+#include "annotation.hpp"
 #include "batch_processor.hpp"
 #include "camera_source.hpp"
 #include "image_source.hpp"
+#include "preview_window.hpp"
 #include "model_runner.hpp"
 #include "postprocess.hpp"
 #include "quality.hpp"
@@ -41,6 +43,26 @@ void handleSigint(int)
     g_stop_requested.store(true);
 }
 
+// Qt's highgui aborts the whole process when it cannot load a platform
+// plugin (for example over SSH with no DISPLAY). Refuse --display up front
+// and point users at the headless save path instead.
+bool displayEnvironmentAvailable()
+{
+    const char* platform = std::getenv("QT_QPA_PLATFORM");
+    if (platform != nullptr) {
+        const std::string value(platform);
+        if (value == "offscreen") {
+            return true;
+        }
+    }
+    const char* display = std::getenv("DISPLAY");
+    if (display != nullptr && display[0] != '\0') {
+        return true;
+    }
+    const char* wayland = std::getenv("WAYLAND_DISPLAY");
+    return wayland != nullptr && wayland[0] != '\0';
+}
+
 struct Options {
     bool show_help = false;
     bool show_version = false;
@@ -49,6 +71,8 @@ struct Options {
     std::string image_dir;
     std::string json_out;
     std::string dump_input;
+    std::string save_annotated;
+    bool display = false;
     float conf_threshold = 0.25f;
     float iou_threshold = 0.45f;
     std::size_t queue_capacity = 4;
@@ -87,6 +111,8 @@ void printUsage(std::ostream& os)
        << "  --iou <float>        NMS IoU threshold in (0, 1] (default 0.45)\n"
        << "  --json-out <path>    Write detection JSON (single result or batch summary)\n"
        << "  --dump-input <path>  Write the float32 NCHW input tensor (single image only)\n"
+       << "  --save-annotated <path> Write the annotated image (single image only)\n"
+       << "  --display            Open a preview window (single image or camera)\n"
        << "  --queue-capacity <n> Batch pipeline queue size (>0, default 4)\n"
        << "\n"
        << "Camera capture (independent of model/image input):\n"
@@ -289,17 +315,28 @@ bool validateOutputPaths(
     const std::vector<std::string>& input_images,
     std::string& error)
 {
-    if (!options.dump_input.empty() && !options.json_out.empty() &&
-        pathsConflict(options.dump_input, options.json_out)) {
-        error = "output paths '" + options.dump_input + "' and '" +
-                options.json_out + "' refer to the same file";
-        return false;
+    std::vector<std::string> outputs;
+    if (!options.dump_input.empty()) {
+        outputs.push_back(options.dump_input);
+    }
+    if (!options.json_out.empty()) {
+        outputs.push_back(options.json_out);
+    }
+    if (!options.save_annotated.empty()) {
+        outputs.push_back(options.save_annotated);
     }
 
-    const auto check_output = [&](const std::string& output) {
-        if (output.empty()) {
-            return true;
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        for (std::size_t j = i + 1; j < outputs.size(); ++j) {
+            if (pathsConflict(outputs[i], outputs[j])) {
+                error = "output paths '" + outputs[i] + "' and '" + outputs[j] +
+                        "' refer to the same file";
+                return false;
+            }
         }
+    }
+
+    for (const std::string& output : outputs) {
         if (pathsConflict(output, options.model_path)) {
             error = "output path '" + output + "' conflicts with model path '" +
                     options.model_path + "'";
@@ -312,10 +349,8 @@ bool validateOutputPaths(
                 return false;
             }
         }
-        return true;
-    };
-
-    return check_output(options.dump_input) && check_output(options.json_out);
+    }
+    return true;
 }
 
 bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
@@ -396,6 +431,16 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
             if (!take_value("--dump-input", options.dump_input)) {
                 return false;
             }
+        } else if (option == "--save-annotated") {
+            if (!take_value("--save-annotated", options.save_annotated)) {
+                return false;
+            }
+        } else if (option == "--display") {
+            if (has_inline_value) {
+                error = "--display does not take a value";
+                return false;
+            }
+            options.display = true;
         } else if (option == "--conf") {
             std::string value;
             if (!take_value("--conf", value) ||
@@ -523,8 +568,10 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
             error = "--capture-only cannot be combined with model/image inputs";
             return false;
         }
-        if (!options.json_out.empty() || !options.dump_input.empty()) {
-            error = "--capture-only does not support --json-out/--dump-input";
+        if (!options.json_out.empty() || !options.dump_input.empty() ||
+            !options.save_annotated.empty() || options.display) {
+            error = "--capture-only does not support "
+                    "--json-out/--dump-input/--save-annotated/--display";
             return false;
         }
         if (options.queue_capacity_set) {
@@ -550,10 +597,28 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
             error = "--camera does not support --json-out/--dump-input";
             return false;
         }
+        if (!options.save_annotated.empty()) {
+            error = "--save-annotated is only supported with --image";
+            return false;
+        }
         return true;
     }
     if (options.camera_options_set || options.reconnect_options_set) {
         error = "camera options require --camera";
+        return false;
+    }
+    if (!options.save_annotated.empty() && options.image_path.empty()) {
+        error = "--save-annotated is only supported with --image";
+        return false;
+    }
+    if (options.display && options.image_path.empty() &&
+        options.image_dir.empty()) {
+        error = "--display requires --image or --camera";
+        return false;
+    }
+    if (options.display && !options.image_dir.empty() &&
+        options.image_path.empty()) {
+        error = "--display is not supported with --image-dir";
         return false;
     }
 
@@ -959,6 +1024,52 @@ bool writeBatchJson(
     return true;
 }
 
+edge_ai::AnnotationInput annotationInputFrom(const edge_ai::FrameResult& frame)
+{
+    edge_ai::AnnotationInput input;
+    input.has_error = !frame.error.empty();
+    input.error = frame.error;
+    input.quality_available = frame.quality_available;
+    input.is_ng = frame.quality_available && frame.quality.is_ng;
+    input.detections = frame.detections;
+    return input;
+}
+
+// Single-image save/display path. Returns false only for an output/display
+// failure; "nothing requested" is success.
+bool produceAnnotatedSingle(
+    const Options& options,
+    const cv::Mat& image,
+    const edge_ai::AnnotationInput& input,
+    const std::string& source,
+    std::string& error)
+{
+    if (options.save_annotated.empty() && !options.display) {
+        return true;
+    }
+    if (image.empty()) {
+        error = "cannot annotate an empty frame";
+        return false;
+    }
+    if (!options.save_annotated.empty()) {
+        const cv::Mat annotated = edge_ai::annotateFrame(image, input);
+        if (!edge_ai::writeAnnotatedImage(annotated, options.save_annotated,
+                                          error)) {
+            return false;
+        }
+        std::cout << "annotated image saved: " << options.save_annotated
+                  << "\n";
+    }
+    if (options.display) {
+        const std::string title =
+            "edge_ai - " + (source.empty() ? std::string("image") : source);
+        if (!edge_ai::showAnnotatedWindow(image, input, title, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int runSingleImage(const Options& options)
 {
     std::string error;
@@ -989,8 +1100,17 @@ int runSingleImage(const Options& options)
     try {
         input = runner->preprocess(frame.image);
     } catch (const std::exception& exception) {
-        std::cerr << kProgram << ": preprocessing failed: "
-                  << exception.what() << "\n";
+        const std::string message =
+            std::string("preprocessing failed: ") + exception.what();
+        edge_ai::AnnotationInput failed;
+        failed.has_error = true;
+        failed.error = message;
+        std::string annotation_error;
+        if (!produceAnnotatedSingle(options, frame.image, failed, frame.source,
+                                    annotation_error)) {
+            std::cerr << kProgram << ": " << annotation_error << "\n";
+        }
+        std::cerr << kProgram << ": " << message << "\n";
         return 1;
     }
 
@@ -1010,6 +1130,14 @@ int runSingleImage(const Options& options)
     const edge_ai::PostprocessResult result =
         runner->infer(input, postprocess_options);
     if (!result.error.empty()) {
+        edge_ai::AnnotationInput failed;
+        failed.has_error = true;
+        failed.error = result.error;
+        std::string annotation_error;
+        if (!produceAnnotatedSingle(options, frame.image, failed, frame.source,
+                                    annotation_error)) {
+            std::cerr << kProgram << ": " << annotation_error << "\n";
+        }
         std::cerr << kProgram << ": " << result.error << "\n";
         return 1;
     }
@@ -1018,6 +1146,14 @@ int runSingleImage(const Options& options)
     std::string quality_error;
     if (!edge_ai::evaluateQuality(result.detections, options.conf_threshold,
                                   quality, quality_error)) {
+        edge_ai::AnnotationInput failed;
+        failed.has_error = true;
+        failed.error = quality_error;
+        std::string annotation_error;
+        if (!produceAnnotatedSingle(options, frame.image, failed, frame.source,
+                                    annotation_error)) {
+            std::cerr << kProgram << ": " << annotation_error << "\n";
+        }
         std::cerr << kProgram << ": " << quality_error << "\n";
         return 1;
     }
@@ -1056,6 +1192,16 @@ int runSingleImage(const Options& options)
         !writeJsonResult(options.json_out, info, input, min_value, max_value,
                          postprocess_options, result, quality, frame.source,
                          frame.timestamp, error)) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    edge_ai::AnnotationInput annotation;
+    annotation.quality_available = true;
+    annotation.is_ng = quality.is_ng;
+    annotation.detections = result.detections;
+    if (!produceAnnotatedSingle(options, frame.image, annotation, frame.source,
+                                error)) {
         std::cerr << kProgram << ": " << error << "\n";
         return 1;
     }
@@ -1266,6 +1412,16 @@ int runCameraInference(const Options& options)
         return 1;
     }
 
+    std::unique_ptr<edge_ai::PreviewWindow> preview;
+    if (options.display) {
+        preview = std::make_unique<edge_ai::PreviewWindow>(
+            "edge_ai camera", &g_stop_requested);
+        if (!preview->start(error)) {
+            std::cerr << kProgram << ": " << error << "\n";
+            return 1;
+        }
+    }
+
     const edge_ai::PostprocessOptions postprocess_options{
         options.conf_threshold, options.iou_threshold};
     edge_ai::PipelineOptions pipeline_options;
@@ -1277,6 +1433,7 @@ int runCameraInference(const Options& options)
     pipeline_options.max_input_frames =
         options.max_frames_set ? options.max_frames : 0;
     pipeline_options.retain_frames = false;
+    pipeline_options.include_frame_image = preview != nullptr;
     edge_ai::ThreadedPipeline pipeline(camera, *runner, postprocess_options,
                                       pipeline_options);
 
@@ -1308,7 +1465,8 @@ int runCameraInference(const Options& options)
     std::cout << "queues: capacity=" << options.queue_capacity << "\n";
 
     const edge_ai::ResultCallback callback =
-        [](const edge_ai::FrameResult& frame, std::string&) {
+        [preview_ptr = preview.get()](const edge_ai::FrameResult& frame,
+                                      std::string&) {
             if (!frame.error.empty()) {
                 std::cout << "[ERROR] index=" << frame.index
                           << " source=" << frame.source << ": "
@@ -1325,15 +1483,31 @@ int runCameraInference(const Options& options)
                 std::cerr << "warning: " << frame.source << ": " << anomaly
                           << "\n";
             }
+            // submit() only stores the newest pending frame; it never waits
+            // for the window, so detection output cannot be slowed by it.
+            if (preview_ptr != nullptr && !frame.image.empty()) {
+                preview_ptr->submit(frame.image,
+                                    annotationInputFrom(frame));
+            }
             return true;
         };
 
     edge_ai::BatchResult batch;
     edge_ai::PipelineStats stats;
     std::string fatal_error;
-    if (!pipeline.run(batch, stats, callback, fatal_error)) {
+    const bool run_ok = pipeline.run(batch, stats, callback, fatal_error);
+    edge_ai::PreviewStats preview_stats;
+    if (preview) {
+        preview->close();
+        preview_stats = preview->stats();
+    }
+    if (!run_ok) {
         std::cerr << kProgram << ": camera pipeline failed: " << fatal_error
                   << "\n";
+        return 1;
+    }
+    if (preview && preview_stats.failed) {
+        std::cerr << kProgram << ": " << preview_stats.failure << "\n";
         return 1;
     }
 
@@ -1352,8 +1526,15 @@ int runCameraInference(const Options& options)
               << " ng=" << stats.ng << " errors=" << stats.errors
               << " reconnect_count=" << camera.reconnectCount()
               << " stopped=" << (g_stop_requested.load() ? 1 : 0) << "\n";
+    if (preview) {
+        std::cout << "preview: submitted=" << preview_stats.submitted
+                  << " shown=" << preview_stats.shown
+                  << " dropped=" << preview_stats.dropped
+                  << " closed_by_user="
+                  << (preview_stats.closed_by_user ? 1 : 0) << "\n";
+    }
     if (g_stop_requested.load()) {
-        std::cout << "camera stopped by SIGINT; accepted frames drained\n";
+        std::cout << "camera stopped; accepted frames drained\n";
     }
     return 0;
 }
@@ -1396,6 +1577,13 @@ int main(int argc, char* argv[])
     if (options.show_version) {
         std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
         return 0;
+    }
+    if (options.display && !displayEnvironmentAvailable()) {
+        std::cerr << kProgram
+                  << ": --display requires DISPLAY/WAYLAND_DISPLAY or "
+                     "QT_QPA_PLATFORM=offscreen; use --save-annotated for "
+                     "headless single-image output\n";
+        return 1;
     }
     // Only camera modes translate SIGINT into a graceful drain. Image modes
     // keep the default SIGINT disposition so Ctrl+C still terminates a batch

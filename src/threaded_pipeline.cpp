@@ -194,6 +194,9 @@ bool ThreadedPipeline::run(
                 }
             }
 
+            if (pipeline_options_.include_frame_image) {
+                frame_result.image = std::move(item.frame.image);
+            }
             if (!result_queue.push(std::move(frame_result))) {
                 break;
             }

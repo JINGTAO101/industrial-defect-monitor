@@ -346,6 +346,44 @@ bool testFullBackpressure(std::string& error)
     return true;
 }
 
+bool testPreviewImageIncluded(std::string& error)
+{
+    std::unique_ptr<edge_ai::ModelRunner> runner;
+    std::string load_error;
+    if (!expect(loadRunner(runner, load_error),
+                "cannot load zero_output.onnx: " + load_error, error)) {
+        return false;
+    }
+
+    SequenceSource source(3);
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = 2;
+    pipeline_options.result_queue_capacity = 2;
+    pipeline_options.include_frame_image = true;
+    edge_ai::ThreadedPipeline pipeline(
+        source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
+
+    bool all_images_present = true;
+    const edge_ai::ResultCallback callback =
+        [&](const edge_ai::FrameResult& frame, std::string&) {
+            if (frame.image.empty() || frame.image.cols != 320 ||
+                frame.image.rows != 200) {
+                all_images_present = false;
+            }
+            return true;
+        };
+
+    edge_ai::BatchResult batch;
+    edge_ai::PipelineStats stats;
+    std::string fatal_error;
+    return expect(pipeline.run(batch, stats, callback, fatal_error),
+                  "preview-image pipeline failed: " + fatal_error, error) &&
+           expect(stats.total == 3,
+                  "preview-image pipeline lost frames", error) &&
+           expect(all_images_present,
+                  "preview result did not carry the source image", error);
+}
+
 bool testExternalStopDrains(std::string& error)
 {
     std::unique_ptr<edge_ai::ModelRunner> runner;
@@ -583,6 +621,7 @@ int main(int argc, char* argv[])
     const TestCase tests[] = {
         {"threaded_normal_drain", testNormalDrain},
         {"threaded_full_backpressure", testFullBackpressure},
+        {"threaded_preview_image_included", testPreviewImageIncluded},
         {"threaded_external_stop_drains", testExternalStopDrains},
         {"threaded_fatal_wakes", testFatalWakesWaiters},
         {"threaded_start_failure_inference", testStartFailureInference},

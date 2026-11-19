@@ -23,6 +23,9 @@ struct FrameResult {
     std::vector<std::string> anomalies;
     bool quality_available = false;
     QualityResult quality;
+    // Present only when PipelineOptions::include_frame_image is enabled
+    // (camera preview). Batch mode leaves it empty to avoid retaining frames.
+    cv::Mat image;
 };
 
 struct BatchResult {

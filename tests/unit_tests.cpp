@@ -12,11 +12,15 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <linux/videodev2.h>
 
+#include "annotation.hpp"
 #include "image_preprocess.hpp"
 #include "camera_source.hpp"
 #include "image_source.hpp"
+#include "preview_window.hpp"
 #include "model_contract.hpp"
 #include "postprocess.hpp"
 #include "quality.hpp"
@@ -1346,6 +1350,206 @@ bool testCameraBadFrameSequence(std::string& error)
                   "frame after bad frame did not use index 1", error);
 }
 
+bool waitForFlag(const std::atomic<bool>& flag, int timeout_ms)
+{
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (flag.load()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return flag.load();
+}
+
+class FakePreviewSink final : public edge_ai::PreviewSink {
+public:
+    FakePreviewSink(int delay_ms,
+                    edge_ai::PreviewStatus status,
+                    std::string failure = "display failed")
+        : delay_ms_(delay_ms),
+          status_(status),
+          failure_(std::move(failure))
+    {
+    }
+
+    edge_ai::PreviewStatus show(const cv::Mat&, std::string& error) override
+    {
+        ++calls_;
+        if (delay_ms_ > 0) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(delay_ms_));
+        }
+        if (status_ == edge_ai::PreviewStatus::Error) {
+            error = failure_;
+        }
+        return status_;
+    }
+
+    void close() noexcept override { ++closes_; }
+
+    std::atomic<int> calls_{0};
+    std::atomic<int> closes_{0};
+
+private:
+    int delay_ms_ = 0;
+    edge_ai::PreviewStatus status_ = edge_ai::PreviewStatus::Ok;
+    std::string failure_;
+};
+
+bool testAnnotationNgBoxes(std::string& error)
+{
+    const cv::Mat image(200, 320, CV_8UC3, cv::Scalar(0, 0, 0));
+    edge_ai::AnnotationInput input;
+    input.quality_available = true;
+    input.is_ng = true;
+    input.detections.push_back({0, "crazing", 0.91f, 40.0f, 30.0f,
+                                160.0f, 120.0f});
+
+    const cv::Mat annotated = edge_ai::annotateFrame(image, input);
+    if (!expect(!annotated.empty(), "annotation returned an empty image",
+                error) ||
+        !expect(annotated.cols == 320 && annotated.rows == 200,
+                "annotation changed the non-square image dimensions", error) ||
+        !expect(annotated.at<cv::Vec3b>(119, 159) == cv::Vec3b(0, 0, 255),
+                "NG box was not drawn at the original coordinates", error) ||
+        !expect(annotated.at<cv::Vec3b>(150, 250) == cv::Vec3b(0, 0, 0),
+                "annotation painted outside the detection box", error) ||
+        !expect(image.at<cv::Vec3b>(119, 159) == cv::Vec3b(0, 0, 0),
+                "annotation modified the caller's source image", error)) {
+        return false;
+    }
+    return true;
+}
+
+bool testAnnotationErrorFrame(std::string& error)
+{
+    const cv::Mat image(200, 320, CV_8UC3, cv::Scalar(0, 0, 0));
+    edge_ai::AnnotationInput input;
+    input.has_error = true;
+    input.error = "inference failed";
+    input.detections.push_back({0, "crazing", 0.91f, 40.0f, 30.0f,
+                                160.0f, 120.0f});
+
+    const cv::Mat annotated = edge_ai::annotateFrame(image, input);
+    return expect(!annotated.empty(), "error annotation is empty", error) &&
+           expect(annotated.at<cv::Vec3b>(120, 160) == cv::Vec3b(0, 0, 0),
+                  "error frame drew a detection box", error) &&
+           expect(annotated.at<cv::Vec3b>(2, 2) == cv::Vec3b(0, 165, 255),
+                  "error frame did not draw the ERROR banner", error);
+}
+
+bool testAnnotationSavePng(std::string& error)
+{
+    const cv::Mat image(200, 320, CV_8UC3, cv::Scalar(0, 0, 0));
+    edge_ai::AnnotationInput input;
+    input.quality_available = true;
+    input.is_ng = true;
+    input.detections.push_back({0, "crazing", 0.91f, 40.0f, 30.0f,
+                                160.0f, 120.0f});
+    const cv::Mat annotated = edge_ai::annotateFrame(image, input);
+
+    const auto path = std::filesystem::temp_directory_path() /
+                      "edge_ai_annotation_test.png";
+    std::string write_error;
+    if (!expect(edge_ai::writeAnnotatedImage(annotated, path.string(),
+                                             write_error),
+                "headless annotated save failed: " + write_error, error)) {
+        return false;
+    }
+    const cv::Mat loaded = cv::imread(path.string(), cv::IMREAD_COLOR);
+    std::error_code remove_error;
+    std::filesystem::remove(path, remove_error);
+    return expect(!loaded.empty(), "saved annotated image cannot be read",
+                  error) &&
+           expect(loaded.cols == 320 && loaded.rows == 200,
+                  "saved annotated image has wrong dimensions", error) &&
+           expect(loaded.at<cv::Vec3b>(119, 159) == cv::Vec3b(0, 0, 255),
+                  "saved annotated image lost the detection box", error);
+}
+
+bool testPreviewDropsFrames(std::string& error)
+{
+    std::atomic<bool> stop{false};
+    auto sink = std::make_unique<FakePreviewSink>(
+        50, edge_ai::PreviewStatus::Ok);
+    FakePreviewSink* sink_ptr = sink.get();
+    edge_ai::PreviewWindow preview("test", &stop, std::move(sink));
+    std::string start_error;
+    if (!expect(preview.start(start_error),
+                "preview failed to start: " + start_error, error)) {
+        return false;
+    }
+
+    edge_ai::AnnotationInput input;
+    input.quality_available = true;
+    const cv::Mat frame(64, 64, CV_8UC3, cv::Scalar(0, 0, 0));
+    for (int i = 0; i < 30; ++i) {
+        preview.submit(frame.clone(), input);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    preview.close();
+    const edge_ai::PreviewStats stats = preview.stats();
+    if (!expect(stats.submitted == 30,
+                "preview submitted count is wrong", error) ||
+        !expect(stats.dropped > 0,
+                "slow preview did not drop any pending frame", error) ||
+        !expect(stats.shown < stats.submitted,
+                "slow preview showed every submitted frame", error) ||
+        !expect(sink_ptr->closes_ == 1,
+                "preview sink was not closed exactly once", error)) {
+        return false;
+    }
+    return true;
+}
+
+bool testPreviewCloseStops(std::string& error)
+{
+    std::atomic<bool> stop{false};
+    auto sink = std::make_unique<FakePreviewSink>(
+        0, edge_ai::PreviewStatus::Closed);
+    edge_ai::PreviewWindow preview("test", &stop, std::move(sink));
+    std::string start_error;
+    if (!expect(preview.start(start_error),
+                "closed-preview failed to start: " + start_error, error)) {
+        return false;
+    }
+    preview.submit(cv::Mat(32, 32, CV_8UC3, cv::Scalar(0, 0, 0)),
+                   edge_ai::AnnotationInput{});
+    const bool stopped = waitForFlag(stop, 1000);
+    preview.close();
+    const edge_ai::PreviewStats stats = preview.stats();
+    return expect(stopped, "closing the preview did not set external stop",
+                  error) &&
+           expect(stats.closed_by_user,
+                  "preview close was not recorded as a user close", error) &&
+           expect(!stats.failed, "user close was recorded as a failure",
+                  error);
+}
+
+bool testPreviewErrorStops(std::string& error)
+{
+    std::atomic<bool> stop{false};
+    auto sink = std::make_unique<FakePreviewSink>(
+        0, edge_ai::PreviewStatus::Error, "injected display failure");
+    edge_ai::PreviewWindow preview("test", &stop, std::move(sink));
+    std::string start_error;
+    if (!expect(preview.start(start_error),
+                "error-preview failed to start: " + start_error, error)) {
+        return false;
+    }
+    preview.submit(cv::Mat(32, 32, CV_8UC3, cv::Scalar(0, 0, 0)),
+                   edge_ai::AnnotationInput{});
+    const bool stopped = waitForFlag(stop, 1000);
+    preview.close();
+    const edge_ai::PreviewStats stats = preview.stats();
+    return expect(stopped, "preview failure did not set external stop", error) &&
+           expect(stats.failed, "preview failure was not recorded", error) &&
+           expect(stats.failure.find("injected") != std::string::npos,
+                  "preview failure lacks the sink diagnostic", error);
+}
+
 class FakeTimeoutCameraBackend final : public edge_ai::CameraBackend {
 public:
     FakeTimeoutCameraBackend()
@@ -1568,6 +1772,12 @@ int main(int argc, char* argv[])
         {"camera_reconnect_stop_during_open",
          testCameraReconnectStopDuringOpen},
         {"camera_bad_frame_sequence", testCameraBadFrameSequence},
+        {"annotation_ng_boxes", testAnnotationNgBoxes},
+        {"annotation_error_frame", testAnnotationErrorFrame},
+        {"annotation_save_png", testAnnotationSavePng},
+        {"preview_drops_frames", testPreviewDropsFrames},
+        {"preview_close_stops", testPreviewCloseStops},
+        {"preview_error_stops", testPreviewErrorStops},
     };
 
     std::string filter;
