@@ -159,7 +159,7 @@ ctest --test-dir build --output-on-failure
 | `unit_camera_colorimetry` | 仅 BT.601/limited（含 default）可用，其他被拒绝 |
 | `cli_camera` | 无设备、缺少 `--capture-only`/`--camera`、非法帧数/格式/尺寸、错误组合 |
 
-本次完整套件 **53/53 通过**；无模型/图片/摄像头时 50 个测试通过。干净
+当前完整套件 **59/59 通过**；无模型/图片/摄像头时 56 个测试通过。干净
 构建日志见 `docs/v4l2-verification.txt`。
 
 ## 6. 待确认 / 限制
@@ -169,8 +169,9 @@ ctest --test-dir build --output-on-failure
 2. 设备被占用（`EBUSY`）和“驱动返回格式与请求不一致”的路径已实现，但无真实
    硬件触发记录；自动测试未覆盖占用场景。
 3. MJPG 转换已实现，但本次实测使用 YUYV；MJPG 真实设备待验证。
-4. 仅支持单平面视频采集；不支持多平面、格式自动协商或有限重连。
-5. 三线程接入、断线重连、可视化留到 5B。
+4. 仅支持单平面视频采集；不支持多平面或格式自动协商。
+5. 断线重连由 5B 的 `ReconnectingCameraSource` 提供；采集模式本身仍是
+   有限帧数。
 6. 采集帧目前只打印元数据，不落盘；后续可视化/推理接入时再处理。
 
 ## 7. 相关文件

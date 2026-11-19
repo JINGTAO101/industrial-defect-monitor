@@ -346,6 +346,63 @@ bool testFullBackpressure(std::string& error)
     return true;
 }
 
+bool testExternalStopDrains(std::string& error)
+{
+    std::unique_ptr<edge_ai::ModelRunner> runner;
+    std::string load_error;
+    if (!expect(loadRunner(runner, load_error),
+                "cannot load zero_output.onnx: " + load_error, error)) {
+        return false;
+    }
+
+    // Unlimited input: the pipeline must keep running until the external stop
+    // arrives, then drain everything it already accepted.
+    SequenceSource source(100000);
+    std::atomic<bool> stop{false};
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = 2;
+    pipeline_options.result_queue_capacity = 2;
+    pipeline_options.external_stop = &stop;
+    pipeline_options.max_input_frames = 0;
+    edge_ai::ThreadedPipeline pipeline(
+        source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
+
+    std::vector<std::size_t> indices;
+    const edge_ai::ResultCallback callback =
+        [&](const edge_ai::FrameResult& frame, std::string&) {
+            indices.push_back(frame.index);
+            if (indices.size() == 5) {
+                stop.store(true);
+            }
+            return true;
+        };
+
+    edge_ai::BatchResult batch;
+    edge_ai::PipelineStats stats;
+    std::string fatal_error;
+    if (!expect(pipeline.run(batch, stats, callback, fatal_error),
+                "continuous pipeline failed: " + fatal_error, error) ||
+        !expect(stats.total >= 5,
+                "continuous pipeline stopped before five results", error) ||
+        !expect(stats.total <= 16,
+                "continuous pipeline ran far past the stop request", error) ||
+        !expect(indices.size() == stats.total,
+                "continuous pipeline lost accepted results", error)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        if (!expect(indices[i] == i,
+                    "continuous pipeline reordered or duplicated results",
+                    error)) {
+            return false;
+        }
+    }
+    std::cout << "external stop: counts(total=" << stats.total
+              << " ok=" << stats.ok << " ng=" << stats.ng
+              << " errors=" << stats.errors << ")\n";
+    return true;
+}
+
 bool testFatalWakesWaiters(std::string& error)
 {
     std::unique_ptr<edge_ai::ModelRunner> runner;
@@ -526,6 +583,7 @@ int main(int argc, char* argv[])
     const TestCase tests[] = {
         {"threaded_normal_drain", testNormalDrain},
         {"threaded_full_backpressure", testFullBackpressure},
+        {"threaded_external_stop_drains", testExternalStopDrains},
         {"threaded_fatal_wakes", testFatalWakesWaiters},
         {"threaded_start_failure_inference", testStartFailureInference},
         {"threaded_start_failure_result", testStartFailureResult},

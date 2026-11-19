@@ -392,6 +392,9 @@ public:
 
         v4l2_buffer buffer{};
         CameraReadOps operations;
+        operations.should_stop = [this] {
+            return external_stop_ != nullptr && external_stop_->load();
+        };
         operations.poll = [this](int timeout_ms, int& error_number) {
             pollfd descriptor{fd_, POLLIN, 0};
             const int result = poll(&descriptor, 1, timeout_ms);
@@ -422,9 +425,13 @@ public:
         const CameraReadResult read_result =
             waitForCameraFrame(operations, timeout_ms_, error);
         if (read_result != CameraReadResult::FrameReady) {
-            error_kind_ = read_result == CameraReadResult::Timeout
-                              ? CameraErrorKind::Timeout
-                              : CameraErrorKind::DeviceLost;
+            if (read_result == CameraReadResult::Stopped) {
+                error_kind_ = CameraErrorKind::None;
+            } else {
+                error_kind_ = read_result == CameraReadResult::Timeout
+                                  ? CameraErrorKind::Timeout
+                                  : CameraErrorKind::DeviceLost;
+            }
             return false;
         }
 
@@ -502,6 +509,11 @@ public:
         timeout_ms_ = timeout_ms;
     }
 
+    void setExternalStop(const std::atomic<bool>* external_stop) override
+    {
+        external_stop_ = external_stop;
+    }
+
 private:
     struct Buffer {
         void* start = nullptr;
@@ -520,6 +532,7 @@ private:
     int fd_ = -1;
     bool streaming_ = false;
     int timeout_ms_ = 2000;
+    const std::atomic<bool>* external_stop_ = nullptr;
     CameraInfo info_;
     std::vector<Buffer> buffers_;
     CameraErrorKind error_kind_ = CameraErrorKind::None;
@@ -612,6 +625,10 @@ CameraReadResult waitForCameraFrame(
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     while (true) {
+        if (operations.should_stop && operations.should_stop()) {
+            error = "camera read stopped";
+            return CameraReadResult::Stopped;
+        }
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline) {
             error = "camera read timeout after " + std::to_string(timeout_ms) +
@@ -621,14 +638,21 @@ CameraReadResult waitForCameraFrame(
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
                                    deadline - now)
                                    .count();
-        const int remaining_ms =
-            static_cast<int>(std::max<long long>(1, remaining));
+        int remaining_ms = static_cast<int>(std::max<long long>(1, remaining));
+        // Slice the wait so Ctrl+C is observed while the device produces no
+        // frames instead of blocking for the whole read timeout.
+        if (operations.should_stop) {
+            remaining_ms = std::min(remaining_ms, 50);
+        }
 
         int poll_error = 0;
         const int poll_result = operations.poll ? operations.poll(
                                                     remaining_ms, poll_error)
                                                 : -1;
         if (poll_result == 0) {
+            if (operations.should_stop) {
+                continue;  // re-check stop and the shared deadline
+            }
             error = "camera read timeout after " + std::to_string(timeout_ms) +
                     " ms";
             return CameraReadResult::Timeout;
@@ -639,6 +663,10 @@ CameraReadResult waitForCameraFrame(
             }
             error = "camera poll failed: " + errnoMessage(poll_error);
             return CameraReadResult::Error;
+        }
+        if (operations.should_stop && operations.should_stop()) {
+            error = "camera read stopped";
+            return CameraReadResult::Stopped;
         }
 
         int dequeue_error = 0;
@@ -717,6 +745,19 @@ CameraSource::~CameraSource()
     }
 }
 
+void CameraSource::setExternalStop(const std::atomic<bool>* external_stop)
+{
+    external_stop_ = external_stop;
+    if (backend_) {
+        backend_->setExternalStop(external_stop);
+    }
+}
+
+bool CameraSource::shouldStop() const
+{
+    return external_stop_ != nullptr && external_stop_->load();
+}
+
 SourceStatus CameraSource::next(Frame& frame, std::string& error)
 {
     error.clear();
@@ -725,9 +766,17 @@ SourceStatus CameraSource::next(Frame& frame, std::string& error)
         last_error_kind_ = CameraErrorKind::Fatal;
         return SourceStatus::Error;
     }
+    if (shouldStop()) {
+        error.clear();
+        return SourceStatus::End;
+    }
 
     std::vector<std::uint8_t> payload;
     if (!backend_->nextFrame(payload, error)) {
+        if (shouldStop()) {
+            error.clear();
+            return SourceStatus::End;
+        }
         last_error_kind_ = backend_->lastErrorKind();
         return SourceStatus::Error;
     }
@@ -762,13 +811,14 @@ ReconnectingCameraSource::ReconnectingCameraSource(
     int max_attempts,
     int reconnect_interval_ms,
     const std::atomic<bool>* external_stop,
-    std::string& error)
+    std::string& error,
+    CameraLogCallback log)
     : ReconnectingCameraSource(
           options, max_attempts, reconnect_interval_ms, external_stop,
           [](const CameraOptions& camera_options, std::string& open_error) {
               return std::make_unique<CameraSource>(camera_options, open_error);
           },
-          error)
+          error, std::move(log))
 {
 }
 
@@ -778,12 +828,14 @@ ReconnectingCameraSource::ReconnectingCameraSource(
     int reconnect_interval_ms,
     const std::atomic<bool>* external_stop,
     CameraFactory factory,
-    std::string& error)
+    std::string& error,
+    CameraLogCallback log)
     : options_(options),
       max_attempts_(max_attempts),
       reconnect_interval_ms_(reconnect_interval_ms),
       external_stop_(external_stop),
-      factory_(std::move(factory))
+      factory_(std::move(factory)),
+      log_(std::move(log))
 {
     error.clear();
     if (max_attempts_ <= 0) {
@@ -810,12 +862,26 @@ ReconnectingCameraSource::ReconnectingCameraSource(
         }
         return;
     }
+    // A production factory returns a non-null CameraSource even when open()
+    // failed; the open error is the authoritative failure signal.
+    if (!error.empty()) {
+        camera_.reset();
+        return;
+    }
+    camera_->setExternalStop(external_stop_);
     info_ = camera_->info();
 }
 
 bool ReconnectingCameraSource::shouldStop() const
 {
     return external_stop_ != nullptr && external_stop_->load();
+}
+
+void ReconnectingCameraSource::log(const std::string& message) const
+{
+    if (log_) {
+        log_(message);
+    }
 }
 
 SourceStatus ReconnectingCameraSource::next(Frame& frame, std::string& error)
@@ -850,10 +916,19 @@ SourceStatus ReconnectingCameraSource::next(Frame& frame, std::string& error)
             camera_frame.index = next_index_++;
             camera_frame.source = options_.device;
             error_kind_ = SourceErrorKind::DataError;
+            if (outage_active_) {
+                log("camera recovered after " +
+                    std::to_string(outage_attempts_) + " reopen attempt(s)");
+                outage_active_ = false;
+                outage_attempts_ = 0;
+            }
             frame = std::move(camera_frame);
             return SourceStatus::Frame;
         }
         if (status == SourceStatus::End) {
+            return SourceStatus::End;
+        }
+        if (shouldStop()) {
             return SourceStatus::End;
         }
 
@@ -872,7 +947,16 @@ SourceStatus ReconnectingCameraSource::next(Frame& frame, std::string& error)
             return SourceStatus::Error;
         }
 
-        // Timeout/DeviceLost/None: close this instance and reopen with budget.
+        // Timeout/DeviceLost/None: close this instance and reopen. The
+        // reconnect budget covers the whole outage and is reset only by a
+        // valid frame above, so "reopen succeeds, reads still time out"
+        // cannot retry forever.
+        if (!outage_active_) {
+            outage_active_ = true;
+            log("camera lost: " +
+                (camera_error.empty() ? std::string("camera read failed")
+                                      : camera_error));
+        }
         camera_.reset();
         if (shouldStop()) {
             return SourceStatus::End;
@@ -892,7 +976,7 @@ ReconnectingCameraSource::ReconnectResult ReconnectingCameraSource::reconnect(
     std::string& error)
 {
     std::string last_error;
-    for (int attempt = 0; attempt < max_attempts_; ++attempt) {
+    while (outage_attempts_ < max_attempts_) {
         int waited_ms = 0;
         while (waited_ms < reconnect_interval_ms_) {
             if (shouldStop()) {
@@ -909,6 +993,7 @@ ReconnectingCameraSource::ReconnectResult ReconnectingCameraSource::reconnect(
             return ReconnectResult::Stopped;
         }
 
+        ++outage_attempts_;
         std::string open_error;
         std::unique_ptr<CameraSource> candidate;
         try {
@@ -917,18 +1002,31 @@ ReconnectingCameraSource::ReconnectResult ReconnectingCameraSource::reconnect(
             open_error = std::string("camera reopen failed: ") +
                          exception.what();
         }
-        if (candidate) {
+        // Production factories return a non-null object even when opening
+        // failed, so only a null pointer is not a sufficient failure test.
+        if (candidate && open_error.empty()) {
+            candidate->setExternalStop(external_stop_);
             camera_ = std::move(candidate);
             info_ = camera_->info();
             ++reconnect_count_;
+            log("camera reopened on attempt " +
+                std::to_string(outage_attempts_) + "/" +
+                std::to_string(max_attempts_) +
+                "; waiting for a valid frame");
             error.clear();
             return ReconnectResult::Success;
         }
         last_error = open_error.empty() ? "camera reopen failed" : open_error;
+        log("camera reopen attempt " + std::to_string(outage_attempts_) + "/" +
+            std::to_string(max_attempts_) + " failed: " + last_error);
     }
 
+    if (last_error.empty()) {
+        last_error = "camera reopened but no valid frame was received";
+    }
     error = "camera reconnect failed after " +
-            std::to_string(max_attempts_) + " attempt(s): " + last_error;
+            std::to_string(outage_attempts_) + " attempt(s): " + last_error;
+    log(error);
     return ReconnectResult::Exhausted;
 }
 

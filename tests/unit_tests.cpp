@@ -793,6 +793,123 @@ bool testCameraReadDeadline(std::string& error)
                   error);
 }
 
+bool testCameraReadStop(std::string& error)
+{
+    std::atomic<bool> stop{false};
+    edge_ai::CameraReadOps operations;
+    operations.should_stop = [&stop] { return stop.load(); };
+    operations.poll = [](int timeout_ms, int&) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
+        return 0;
+    };
+    operations.dequeue = [](int&) { return -1; };
+
+    std::thread stopper([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        stop.store(true);
+    });
+    const auto start = std::chrono::steady_clock::now();
+    std::string read_error;
+    const edge_ai::CameraReadResult result =
+        edge_ai::waitForCameraFrame(operations, 3000, read_error);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - start)
+                             .count();
+    stopper.join();
+    return expect(result == edge_ai::CameraReadResult::Stopped,
+                  "stop during a frame wait did not return Stopped: " +
+                      read_error,
+                  error) &&
+           expect(read_error.find("stopped") != std::string::npos,
+                  "stopped read error is unclear: " + read_error, error) &&
+           expect(elapsed < 1000,
+                  "stop during a frame wait did not slice the poll timeout",
+                  error);
+}
+
+bool testCameraSourceExternalStop(std::string& error)
+{
+    class StopAwareBackend final : public edge_ai::CameraBackend {
+    public:
+        StopAwareBackend()
+        {
+            info_.device = "/dev/stop-aware";
+            info_.actual_format = "YUYV";
+            info_.actual_width = 2;
+            info_.actual_height = 2;
+            info_.actual_fps = 30.0;
+            info_.bytes_per_line = 4;
+        }
+
+        bool nextFrame(std::vector<std::uint8_t>&,
+                       std::string& read_error) override
+        {
+            edge_ai::CameraReadOps operations;
+            operations.should_stop = [this] {
+                return stop_ != nullptr && stop_->load();
+            };
+            operations.poll = [](int timeout_ms, int&) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(timeout_ms));
+                return 0;
+            };
+            operations.dequeue = [](int&) { return -1; };
+            const edge_ai::CameraReadResult result =
+                edge_ai::waitForCameraFrame(operations, 3000, read_error);
+            return result == edge_ai::CameraReadResult::FrameReady;
+        }
+
+        const edge_ai::CameraInfo& info() const override { return info_; }
+        void setExternalStop(const std::atomic<bool>* stop) override
+        {
+            stop_ = stop;
+        }
+        void close() noexcept override {}
+
+    private:
+        edge_ai::CameraInfo info_;
+        const std::atomic<bool>* stop_ = nullptr;
+    };
+
+    edge_ai::CameraOptions options;
+    options.device = "/dev/stop-aware";
+    options.format = "YUYV";
+    options.width = 2;
+    options.height = 2;
+    options.fps = 30;
+    options.timeout_ms = 3000;
+    std::string source_error;
+    edge_ai::CameraSource source(
+        options, std::make_unique<StopAwareBackend>(), source_error);
+    if (!expect(source_error.empty(),
+                "stop-aware camera construction failed: " + source_error,
+                error)) {
+        return false;
+    }
+    std::atomic<bool> stop{false};
+    source.setExternalStop(&stop);
+
+    edge_ai::SourceStatus status = edge_ai::SourceStatus::Error;
+    const auto start = std::chrono::steady_clock::now();
+    std::thread worker([&] {
+        edge_ai::Frame frame;
+        status = source.next(frame, source_error);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    stop.store(true);
+    worker.join();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - start)
+                             .count();
+    return expect(status == edge_ai::SourceStatus::End,
+                  "camera source did not end on external stop", error) &&
+           expect(source_error.empty(),
+                  "external stop produced an error: " + source_error, error) &&
+           expect(elapsed < 1000,
+                  "camera source waited for the full read timeout on stop",
+                  error);
+}
+
 bool testCameraColorimetry(std::string& error)
 {
     return expect(edge_ai::supportedYuyvColorimetry(
@@ -962,6 +1079,148 @@ bool testCameraReconnectExhausted(std::string& error)
                   error);
 }
 
+bool testCameraReconnectOpenError(std::string& error)
+{
+    using Event = ScriptedCameraBackend::Event;
+    std::vector<std::string> logs;
+    int factory_calls = 0;
+    const edge_ai::CameraFactory factory =
+        [&](const edge_ai::CameraOptions& options,
+            std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        ++factory_calls;
+        if (factory_calls == 1) {
+            auto backend = std::make_unique<ScriptedCameraBackend>(
+                std::vector<Event>{Event::Lost});
+            return std::make_unique<edge_ai::CameraSource>(
+                options, std::move(backend), open_error);
+        }
+        // Mimic the production factory: the object is non-null even though
+        // opening failed, and the error string is the failure signal.
+        return std::make_unique<edge_ai::CameraSource>(
+            options, std::unique_ptr<edge_ai::CameraBackend>{}, open_error);
+    };
+    std::string source_error;
+    edge_ai::ReconnectingCameraSource source(
+        reconnectCameraOptions(), 2, 0, nullptr, factory, source_error,
+        [&logs](const std::string& message) { logs.push_back(message); });
+    if (!expect(source_error.empty(),
+                "open-error source construction failed: " + source_error,
+                error)) {
+        return false;
+    }
+    edge_ai::Frame frame;
+    const edge_ai::SourceStatus status = source.next(frame, source_error);
+    if (!expect(status == edge_ai::SourceStatus::Error,
+                "non-null open failure was treated as success", error) ||
+        !expect(source.errorKind() == edge_ai::SourceErrorKind::Fatal,
+                "non-null open failure was not fatal", error) ||
+        !expect(factory_calls == 3,
+                "non-null open failure did not use the reconnect budget", error) ||
+        !expect(source_error.find("reconnect failed") != std::string::npos,
+                "open-failure diagnosis is unclear: " + source_error, error)) {
+        return false;
+    }
+    if (!expect(logs.size() >= 2,
+                "open-failure reconnect did not log loss/exhaustion", error) ||
+        !expect(logs.front().find("camera lost") != std::string::npos,
+                "first reconnect log is not a loss event", error) ||
+        !expect(logs.back().find("reconnect failed") != std::string::npos,
+                "last reconnect log is not exhaustion", error)) {
+        return false;
+    }
+
+    // The initial factory call must reject the same non-null/error shape.
+    const edge_ai::CameraFactory failing_factory =
+        [](const edge_ai::CameraOptions& options,
+           std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        return std::make_unique<edge_ai::CameraSource>(
+            options, std::unique_ptr<edge_ai::CameraBackend>{}, open_error);
+    };
+    std::string initial_error;
+    edge_ai::ReconnectingCameraSource rejected(
+        reconnectCameraOptions(), 2, 0, nullptr, failing_factory, initial_error);
+    return expect(!initial_error.empty(),
+                  "initial non-null open failure was accepted", error);
+}
+
+bool testCameraReconnectNoFrameBudget(std::string& error)
+{
+    class NoFrameBackend final : public edge_ai::CameraBackend {
+    public:
+        NoFrameBackend()
+        {
+            info_.device = "/dev/no-frame";
+            info_.actual_format = "YUYV";
+            info_.actual_width = 2;
+            info_.actual_height = 2;
+            info_.actual_fps = 30.0;
+            info_.bytes_per_line = 4;
+        }
+        bool nextFrame(std::vector<std::uint8_t>&,
+                       std::string& read_error) override
+        {
+            read_error = "camera read timeout after 100 ms";
+            return false;
+        }
+        const edge_ai::CameraInfo& info() const override { return info_; }
+        edge_ai::CameraErrorKind lastErrorKind() const override
+        {
+            return edge_ai::CameraErrorKind::Timeout;
+        }
+        void close() noexcept override {}
+
+    private:
+        edge_ai::CameraInfo info_;
+    };
+
+    std::vector<std::string> logs;
+    int factory_calls = 0;
+    const edge_ai::CameraFactory factory =
+        [&](const edge_ai::CameraOptions& options,
+            std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        ++factory_calls;
+        // Every reopen succeeds, but no frame ever arrives.
+        return std::make_unique<edge_ai::CameraSource>(
+            options, std::make_unique<NoFrameBackend>(), open_error);
+    };
+    std::string source_error;
+    edge_ai::ReconnectingCameraSource source(
+        reconnectCameraOptions(), 3, 0, nullptr, factory, source_error,
+        [&logs](const std::string& message) { logs.push_back(message); });
+    if (!expect(source_error.empty(),
+                "no-frame source construction failed: " + source_error,
+                error)) {
+        return false;
+    }
+    edge_ai::Frame frame;
+    const edge_ai::SourceStatus status = source.next(frame, source_error);
+    if (!expect(status == edge_ai::SourceStatus::Error,
+                "no-frame outage did not become fatal", error) ||
+        !expect(source.errorKind() == edge_ai::SourceErrorKind::Fatal,
+                "no-frame outage is not Fatal", error) ||
+        !expect(factory_calls == 4,
+                "no-frame outage ignored the reconnect budget: " +
+                    std::to_string(factory_calls) + " opens",
+                error) ||
+        !expect(source.reconnectCount() == 3,
+                "no-frame outage did not count three successful reopens",
+                error) ||
+        !expect(source_error.find("no valid frame") != std::string::npos,
+                "no-frame exhaustion is not diagnostic: " + source_error,
+                error)) {
+        return false;
+    }
+    if (!expect(logs.size() >= 5,
+                "no-frame outage did not log loss/attempts/exhaustion", error) ||
+        !expect(logs.front().find("camera lost") != std::string::npos,
+                "no-frame outage did not log the loss", error) ||
+        !expect(logs.back().find("reconnect failed") != std::string::npos,
+                "no-frame outage did not log exhaustion", error)) {
+        return false;
+    }
+    return true;
+}
+
 bool testCameraReconnectStop(std::string& error)
 {
     using Event = ScriptedCameraBackend::Event;
@@ -1053,6 +1312,10 @@ public:
     }
 
     const edge_ai::CameraInfo& info() const override { return info_; }
+    edge_ai::CameraErrorKind lastErrorKind() const override
+    {
+        return edge_ai::CameraErrorKind::Timeout;
+    }
     void close() noexcept override {}
 
 private:
@@ -1241,9 +1504,13 @@ int main(int argc, char* argv[])
         {"camera_buffer_validation", testCameraBufferValidation},
         {"camera_busy_error", testCameraBusyError},
         {"camera_read_deadline", testCameraReadDeadline},
+        {"camera_read_stop", testCameraReadStop},
+        {"camera_source_external_stop", testCameraSourceExternalStop},
         {"camera_colorimetry", testCameraColorimetry},
         {"camera_reconnect_success", testCameraReconnectSuccess},
         {"camera_reconnect_exhausted", testCameraReconnectExhausted},
+        {"camera_reconnect_open_error", testCameraReconnectOpenError},
+        {"camera_reconnect_no_frame_budget", testCameraReconnectNoFrameBudget},
         {"camera_reconnect_stop", testCameraReconnectStop},
         {"camera_bad_frame_sequence", testCameraBadFrameSequence},
     };

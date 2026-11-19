@@ -169,6 +169,7 @@ if(BUILD_TESTING)
     foreach(threaded_test
             threaded_normal_drain
             threaded_full_backpressure
+            threaded_external_stop_drains
             threaded_fatal_wakes
             threaded_start_failure_inference
             threaded_start_failure_result
@@ -222,9 +223,13 @@ if(BUILD_TESTING)
             camera_buffer_validation
             camera_busy_error
             camera_read_deadline
+            camera_read_stop
+            camera_source_external_stop
             camera_colorimetry
             camera_reconnect_success
             camera_reconnect_exhausted
+            camera_reconnect_open_error
+            camera_reconnect_no_frame_budget
             camera_reconnect_stop
             camera_bad_frame_sequence)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
@@ -284,6 +289,16 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_camera_tests.cmake
     )
     set_tests_properties(cli_camera PROPERTIES TIMEOUT 10)
+
+    add_test(
+        NAME cli_signal
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/cli-signal-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_signal_tests.cmake
+    )
+    set_tests_properties(cli_signal PROPERTIES TIMEOUT 60)
 
     if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)
         add_test(

@@ -117,10 +117,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   --camera /dev/video0 --capture-only --max-frames 30 \
   --camera-format YUYV --camera-width 640 --camera-height 480 --camera-fps 30
 
-# 摄像头 + 模型三线程检测
+# 摄像头 + 模型三线程检测（省略 --max-frames 为连续模式，Ctrl+C 停止）
 ./build/bin/edge_ai \
   --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
-  --camera /dev/video0 --max-frames 30 --queue-capacity 1 \
+  --camera /dev/video0 --queue-capacity 1 \
   --camera-reconnect-attempts 3 --camera-reconnect-interval-ms 1000
 
 # 非法参数：stderr 报错，退出码 2
@@ -150,11 +150,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 50 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 56 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
-重连）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和
+重连/停止）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和
 `EDGE_AI_PYTHON` 时额外运行六图对照、对照守卫和线程化批量对照测试，共
-53 个。本次验证 53/53 通过。
+59 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -207,12 +207,18 @@ ctest --test-dir build --output-on-failure
 - `camera_colorimetry`：仅接受 BT.601/limited（含 default 映射），拒绝其他；
 - `cli_camera`：无设备、缺少参数/非法帧数/格式/尺寸及错误组合。
 
-任务 5B 新增 4 个模拟重连测试：
+任务 5B 新增模拟重连与中断测试：
 
 - `camera_reconnect_success`：设备失联后重开成功，序号不重置；
 - `camera_reconnect_exhausted`：重试预算耗尽返回 Fatal；
+- `camera_reconnect_open_error`：工厂返回“非空对象 + 错误”仍按失败处理；
+- `camera_reconnect_no_frame_budget`：重开成功但始终无帧，累计预算只重开 3 次；
 - `camera_reconnect_stop`：重连等待期间停止，返回 End 且不再重开；
-- `camera_bad_frame_sequence`：坏帧只记 DataError，后续好帧序号继续。
+- `camera_bad_frame_sequence`：坏帧只记 DataError，后续好帧序号继续；
+- `camera_read_stop` / `camera_source_external_stop`：3 秒读超时期间停止可在
+  1 秒内结束并返回 End；
+- `threaded_external_stop_drains`：省略帧数时连续运行，停止后只排空已接收帧；
+- `cli_signal`：图片批量模式收到 SIGINT 以 130 终止，摄像头处理器不接管。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
@@ -265,7 +271,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── v4l2-capture-run.txt           # vivid 30 帧采集日志
 │   ├── v4l2-verification.txt          # 5A 干净构建、49 项测试和故障回归
 │   ├── camera-inference.md            # 任务 5B 三线程摄像头检测与重连
-│   ├── camera-inference-run.txt       # 5B vivid 30 帧、Ctrl+C、坏帧日志
+│   ├── camera-inference-run.txt       # 5B vivid 30 帧、连续模式、Ctrl+C、坏帧日志
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -283,6 +289,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_path_conflict_tests.cmake
     ├── cli_batch_tests.cmake
     ├── cli_camera_tests.cmake
+    ├── cli_signal_tests.cmake
     ├── compare_reference_guard_tests.cmake
     ├── queue_tests.cpp
     ├── threaded_pipeline_tests.cpp
@@ -374,21 +381,27 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 53/53（含 5B 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 59/59（含 5B 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 
 详细设计与证据见 [docs/camera-inference.md](docs/camera-inference.md)。
 
-- `--model ... --camera /dev/videoN --max-frames N` 复用读取/推理/结果三线程；
+- `--model ... --camera /dev/videoN` 复用读取/推理/结果三线程；省略
+  `--max-frames` 时连续运行，指定时按输入项数停止；
 - 摄像头结果逐帧回调，`retain_frames=false`，长期运行不使用
   `BatchResult.frames` 累积内存；
 - 坏帧记 ERROR、不做 OK/NG；设备失联按可配置次数/间隔重开，序号不重置；
+- 重开以“对象非空且错误为空”为成功；重试预算在一次失联内累计，只有收到
+  有效帧才恢复并清零，避免“打开成功但一直无帧”无限重连；
+- 失联、重开、恢复、耗尽均输出 `camera reconnect: ...` 日志；
 - 重试耗尽或源 Fatal 时关闭队列、join 全部线程并返回非零；
-- Ctrl+C 停止接收并排空已接收帧后正常退出；
-- 模拟测试覆盖重连成功、重试耗尽、重连等待中停止、坏帧序号；
+- 摄像头模式才接管 SIGINT；停止接收并排空已接收帧后正常退出，无帧等待按
+  50ms 分片检查停止；图片模式保持默认中断行为；
+- 模拟测试覆盖打开失败（非空对象+错误）、无帧预算耗尽、重连等待中停止、
+  坏帧序号和停止可打断读等待；
 - 队列容量 1 的 30 帧 vivid 检测：`total=30 ok=0 ng=30 errors=0`，两个队列
-  峰值均为 1；Ctrl+C 实收 29 帧全部处理完，`stopped=1`。
+  峰值均为 1；连续模式 6 秒处理 69 帧，Ctrl+C 后 `stopped=1` 正常退出。
 
 ## 验收记录（2B/3）
 

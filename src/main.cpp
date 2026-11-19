@@ -92,7 +92,8 @@ void printUsage(std::ostream& os)
        << "Camera capture (independent of model/image input):\n"
        << "  --camera <path>       V4L2 device (e.g. /dev/video0)\n"
        << "  --capture-only        Capture frames without model inference\n"
-       << "  --max-frames <n>      Frames to capture (default 30)\n"
+       << "  --max-frames <n>      Frame limit; capture-only default 30,\n"
+       << "                        camera inference default continuous (Ctrl+C stops)\n"
        << "  --camera-format <f>   MJPG or YUYV (default YUYV)\n"
        << "  --camera-width <n>    Requested width (default 640)\n"
        << "  --camera-height <n>   Requested height (default 480)\n"
@@ -1171,6 +1172,7 @@ int runCapture(const Options& options)
         std::cerr << kProgram << ": " << error << "\n";
         return 1;
     }
+    camera.setExternalStop(&g_stop_requested);
 
     const edge_ai::CameraInfo& info = camera.info();
     std::cout << "camera: " << info.device << "\n";
@@ -1201,6 +1203,9 @@ int runCapture(const Options& options)
         edge_ai::Frame frame;
         const edge_ai::SourceStatus status = camera.next(frame, error);
         if (status != edge_ai::SourceStatus::Frame) {
+            if (g_stop_requested.load()) {
+                break;
+            }
             std::cerr << kProgram << ": camera capture failed: "
                       << (error.empty() ? "camera ended early" : error)
                       << "\n";
@@ -1221,6 +1226,9 @@ int runCapture(const Options& options)
                   << timestamp_ms << "\n";
     }
 
+    if (g_stop_requested.load()) {
+        std::cout << "camera capture stopped by SIGINT\n";
+    }
     std::cout << "camera capture complete: device=" << info.device
               << " format=" << info.actual_format
               << " size=" << info.actual_width << "x" << info.actual_height
@@ -1240,9 +1248,13 @@ int runCameraInference(const Options& options)
 {
     std::string error;
     const edge_ai::CameraOptions camera_options = makeCameraOptions(options);
+    const edge_ai::CameraLogCallback camera_log =
+        [](const std::string& message) {
+            std::cerr << "camera reconnect: " << message << "\n";
+        };
     edge_ai::ReconnectingCameraSource camera(
         camera_options, options.reconnect_attempts,
-        options.reconnect_interval_ms, &g_stop_requested, error);
+        options.reconnect_interval_ms, &g_stop_requested, error, camera_log);
     if (!error.empty()) {
         std::cerr << kProgram << ": " << error << "\n";
         return 1;
@@ -1260,7 +1272,10 @@ int runCameraInference(const Options& options)
     pipeline_options.input_queue_capacity = options.queue_capacity;
     pipeline_options.result_queue_capacity = options.queue_capacity;
     pipeline_options.external_stop = &g_stop_requested;
-    pipeline_options.max_input_frames = options.max_frames;
+    // Omitted --max-frames means continuous operation for camera inference;
+    // capture-only keeps its historical default of 30 frames.
+    pipeline_options.max_input_frames =
+        options.max_frames_set ? options.max_frames : 0;
     pipeline_options.retain_frames = false;
     edge_ai::ThreadedPipeline pipeline(camera, *runner, postprocess_options,
                                       pipeline_options);
@@ -1284,6 +1299,12 @@ int runCameraInference(const Options& options)
               << " quantization=" << info.quantization << "\n";
     std::cout << "camera reconnect: attempts=" << options.reconnect_attempts
               << " interval_ms=" << options.reconnect_interval_ms << "\n";
+    std::cout << "frame limit: ";
+    if (options.max_frames_set) {
+        std::cout << options.max_frames << "\n";
+    } else {
+        std::cout << "continuous (Ctrl+C to stop)\n";
+    }
     std::cout << "queues: capacity=" << options.queue_capacity << "\n";
 
     const edge_ai::ResultCallback callback =
@@ -1362,7 +1383,6 @@ int runInference(const Options& options)
 
 int main(int argc, char* argv[])
 {
-    std::signal(SIGINT, handleSigint);
     Options options;
     std::string error;
     if (!parseOptions(argc, argv, options, error)) {
@@ -1377,10 +1397,15 @@ int main(int argc, char* argv[])
         std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
         return 0;
     }
+    // Only camera modes translate SIGINT into a graceful drain. Image modes
+    // keep the default SIGINT disposition so Ctrl+C still terminates a batch
+    // instead of being swallowed by this process-wide handler.
     if (options.capture_only) {
+        std::signal(SIGINT, handleSigint);
         return runCapture(options);
     }
     if (!options.camera_path.empty()) {
+        std::signal(SIGINT, handleSigint);
         return runCameraInference(options);
     }
     if (options.model_path.empty()) {

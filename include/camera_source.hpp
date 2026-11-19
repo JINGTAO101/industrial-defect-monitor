@@ -60,7 +60,7 @@ bool validateCameraBuffer(
     std::size_t buffer_length,
     std::string& error);
 
-enum class CameraReadResult { FrameReady, Timeout, Error };
+enum class CameraReadResult { FrameReady, Timeout, Error, Stopped };
 
 struct CameraReadOps {
     // > 0 ready, 0 timeout, -1 error with error_number (EINTR is retried by
@@ -69,6 +69,9 @@ struct CameraReadOps {
     // 0 success, -1 error with error_number (EAGAIN/EINTR retried until the
     // shared deadline expires).
     std::function<int(int& error_number)> dequeue;
+    // Optional external stop (Ctrl+C). When set, poll is sliced so a blocked
+    // read observes the flag within ~50ms instead of the full timeout.
+    std::function<bool()> should_stop;
 };
 
 CameraReadResult waitForCameraFrame(
@@ -99,6 +102,8 @@ public:
                            std::string& error) = 0;
     virtual const CameraInfo& info() const = 0;
     virtual CameraErrorKind lastErrorKind() const { return CameraErrorKind::None; }
+    // Optional stop propagation for backends that can block on a frame read.
+    virtual void setExternalStop(const std::atomic<bool>*) {}
     virtual void close() noexcept = 0;
 };
 
@@ -114,19 +119,26 @@ public:
 
     SourceStatus next(Frame& frame, std::string& error) override;
 
+    // Lets a blocked read return End promptly when Ctrl+C is requested.
+    void setExternalStop(const std::atomic<bool>* external_stop);
+
     const CameraInfo& info() const;
     CameraErrorKind lastErrorKind() const;
 
 private:
+    bool shouldStop() const;
+
     CameraOptions options_;
     CameraInfo info_;
     std::unique_ptr<CameraBackend> backend_;
+    const std::atomic<bool>* external_stop_ = nullptr;
     std::size_t next_index_ = 0;
     CameraErrorKind last_error_kind_ = CameraErrorKind::None;
 };
 
 using CameraFactory =
     std::function<std::unique_ptr<CameraSource>(const CameraOptions&, std::string&)>;
+using CameraLogCallback = std::function<void(const std::string&)>;
 
 // Wraps a V4L2 CameraSource and reopens it after a device-loss/timeout.
 // Bad frames are returned as DataError; reconnect exhaustion is Fatal.
@@ -137,7 +149,8 @@ public:
         int max_attempts,
         int reconnect_interval_ms,
         const std::atomic<bool>* external_stop,
-        std::string& error);
+        std::string& error,
+        CameraLogCallback log = {});
 
     // Test seam: factory creates each CameraSource instance.
     ReconnectingCameraSource(
@@ -146,7 +159,8 @@ public:
         int reconnect_interval_ms,
         const std::atomic<bool>* external_stop,
         CameraFactory factory,
-        std::string& error);
+        std::string& error,
+        CameraLogCallback log = {});
 
     SourceStatus next(Frame& frame, std::string& error) override;
     SourceErrorKind errorKind() const override;
@@ -157,6 +171,7 @@ private:
     enum class ReconnectResult { Success, Stopped, Exhausted };
 
     bool shouldStop() const;
+    void log(const std::string& message) const;
     ReconnectResult reconnect(std::string& error);
 
     CameraOptions options_;
@@ -164,10 +179,15 @@ private:
     int reconnect_interval_ms_ = 0;
     const std::atomic<bool>* external_stop_ = nullptr;
     CameraFactory factory_;
+    CameraLogCallback log_;
     std::unique_ptr<CameraSource> camera_;
     CameraInfo info_;
     std::size_t next_index_ = 0;
     std::size_t reconnect_count_ = 0;
+    // Reopen budget for the current outage. Reset only after a valid frame so
+    // repeated "reopen succeeds but reads keep timing out" cannot loop forever.
+    int outage_attempts_ = 0;
+    bool outage_active_ = false;
     SourceErrorKind error_kind_ = SourceErrorKind::DataError;
 };
 

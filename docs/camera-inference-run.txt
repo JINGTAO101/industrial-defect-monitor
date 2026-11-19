@@ -292,3 +292,45 @@ $ ./build/bin/edge_ai_tests camera_reconnect_exhausted
 $ ./build/bin/edge_ai_tests camera_reconnect_stop
 [PASS] camera_reconnect_stop
 1 test(s), 0 failure(s)
+
+# ---- 5B review fixes (open error, cumulative budget, continuous, SIGINT) ----
+
+$ ./build/bin/edge_ai_tests camera_reconnect_open_error
+[PASS] camera_reconnect_open_error       # factory returns non-null object + error
+1 test(s), 0 failure(s)
+
+$ ./build/bin/edge_ai_tests camera_reconnect_no_frame_budget
+[PASS] camera_reconnect_no_frame_budget  # 3 reopens, each opens but no frame
+1 test(s), 0 failure(s)
+
+$ ./build/bin/edge_ai_tests camera_read_stop
+[PASS] camera_read_stop                  # 3s read deadline, stopped < 1s
+1 test(s), 0 failure(s)
+
+$ ./build/bin/edge_ai_tests camera_source_external_stop
+[PASS] camera_source_external_stop
+1 test(s), 0 failure(s)
+
+$ ./build/bin/edge_ai_threaded_tests threaded_external_stop_drains
+external stop: counts(total=8 ok=8 ng=0 errors=0)
+[PASS] threaded_external_stop_drains
+1 test(s), 0 failure(s)
+
+$ ctest --test-dir build -R cli_signal --output-on-failure
+1/1 Test #55: cli_signal .......................   Passed    7.42 sec
+100% tests passed, 0 tests failed out of 1
+
+# Image batch: 2000 inputs, SIGINT after 2s -> exit 130, no summary line.
+# Camera continuous mode (no --max-frames), vivid, real model:
+$ timeout --preserve-status -s INT 6s edge_ai --model ... --camera /dev/video0 \
+    --queue-capacity 1 --camera-timeout-ms 3000
+...
+camera reconnect: attempts=3 interval_ms=1000
+frame limit: continuous (Ctrl+C to stop)
+...
+[NG] index=68 source=/dev/video0 detections=6
+threads: reader=134673499809408 inference=134673491416704 result=134673483024000
+queues: input capacity=1 max_depth=1 producer_waits=67; result capacity=1 max_depth=1 producer_waits=0
+summary: total=69 ok=0 ng=69 errors=0 reconnect_count=0 stopped=1
+camera stopped by SIGINT; accepted frames drained
+# wall=6.25s, exit code: 0

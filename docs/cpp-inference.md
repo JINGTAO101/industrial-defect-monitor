@@ -278,7 +278,7 @@ SUMMARY: images=6 failures=0 max_conf_diff=1.192e-06 max_bbox_diff=3.436e-05 max
 ctest --test-dir build --output-on-failure
 ```
 
-本次配置（提供真实模型和图片路径）共 53 个测试全部通过：
+当前配置（提供真实模型和图片路径）共 59 个测试全部通过：
 
 | 测试 | 内容 |
 | --- | --- |
@@ -301,7 +301,7 @@ ctest --test-dir build --output-on-failure
 | `cpp_reference_rejects_incomplete_inputs` | 只有一张图时必须失败；阈值不一致时必须失败（可选配置） |
 
 不提供 `EDGE_AI_MODEL_PATH` 等变量时，两个 `cpp_reference_*` 测试不会注册；
-其余 50 个测试仍可运行。失败路径的原始输出见第 4 节。任务 3 新增的质量判定、图片源和批量测试见
+其余 56 个测试仍可运行。失败路径的原始输出见第 4 节。任务 3 新增的质量判定、图片源和批量测试见
 `docs/input-and-quality.md`。
 
 测试夹具：
@@ -329,7 +329,7 @@ ctest --test-dir build --output-on-failure
 7. **性能**：未设置性能目标，也未做系统基准；仅记录功能验证。
 8. **未包含**：摄像头、多线程、SQLite、MQTT。
 9. **可选集成测试**：需要外部模型、六张测试图和 Python venv；这些资产不提交，
-   干净克隆只能默认运行 50 个不依赖真实模型的测试。
+   干净克隆只能默认运行 56 个不依赖真实模型的测试。
 
 ## 10. 相关文件
 

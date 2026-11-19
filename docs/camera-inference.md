@@ -29,10 +29,18 @@ CameraSource (V4L2)
 - **设备失联/读取超时**：关闭当前 `CameraSource`，按
   `--camera-reconnect-attempts`（默认 3）和
   `--camera-reconnect-interval-ms`（默认 1000）重开设备。
+- 工厂在打开失败时会返回**非空对象 + 错误字符串**，因此包装器以
+  `open_error.empty()` 作为成功条件，而不只是检查指针是否为空。
+- 重试预算是**一次失联事件**的累计值：每次重开尝试（包括“打开成功但一直
+  读不到帧”）都消耗一次，只有收到第一帧有效画面才判定恢复并清零。这样
+  “每次都能打开、但读帧始终超时”不会无限重连。
+- 失联、每次重开成功/失败、恢复和预算耗尽都输出
+  `camera reconnect: ...` 日志。
 - 重连成功后帧序号**不重置**；包装器维护全局递增序号。
 - 重试预算耗尽：返回 `Fatal`，流水线关闭两个队列、唤醒并 join 所有线程，
   CLI 输出 `camera pipeline failed` 并以 1 退出。
-- 重连等待按小片（≤50ms）检查外部停止标志；Ctrl+C 可中断等待并正常排空。
+- 重连等待按小片（≤50ms）检查外部停止标志；读取中的 `poll` 也按 50ms
+  分片，因此设备无帧时 Ctrl+C 可在约 50ms 内结束等待，而不是等满读超时。
 
 ## 3. CLI
 
@@ -48,6 +56,8 @@ CameraSource (V4L2)
 
 - `--camera` 与 `--model` 组合启用摄像头检测；`--capture-only` 仍是无模型的
   5A 采集模式。
+- 摄像头检测**省略 `--max-frames` 时连续运行**，直到 Ctrl+C；纯采集模式
+  省略时仍默认 30 帧。
 - `--queue-capacity` 同时设置两个队列，本验收使用 1。
 - 摄像头模式暂不支持 `--json-out`/`--dump-input`。
 
@@ -82,6 +92,23 @@ camera stopped by SIGINT; accepted frames drained
 
 已接收的 29 帧全部完成推理并输出，三个线程回收后正常退出。
 
+### 连续模式（省略 `--max-frames`）
+
+```text
+$ timeout --preserve-status -s INT 6s edge_ai --model ... --camera /dev/video0 \
+    --queue-capacity 1 --camera-timeout-ms 3000
+...
+camera reconnect: attempts=3 interval_ms=1000
+frame limit: continuous (Ctrl+C to stop)
+...
+summary: total=69 ok=0 ng=69 errors=0 reconnect_count=0 stopped=1
+camera stopped by SIGINT; accepted frames drained
+# wall=6.25s, exit code 0
+```
+
+6 秒内处理 69 帧（明显超过旧的固定 30 帧），Ctrl+C 后读取线程停止接收，
+已接收帧排空，三个线程 join 后退出。
+
 ### 坏帧
 
 vivid 注入 `V4L2_BUF_FLAG_ERROR` 后运行 5 帧：
@@ -100,8 +127,14 @@ summary: total=5 ok=0 ng=4 errors=1 reconnect_count=0 stopped=0
 | --- | --- |
 | `unit_camera_reconnect_success` | 首设备帧后失联，第二设备恢复；帧序号 0、1 连续，reconnect_count=1 |
 | `unit_camera_reconnect_exhausted` | 重开持续失败，按配置次数耗尽后返回 Fatal 错误 |
+| `unit_camera_reconnect_open_error` | 工厂返回“非空对象 + 打开错误”时仍计为失败，耗尽后 Fatal |
+| `unit_camera_reconnect_no_frame_budget` | 每次重开成功但读帧始终超时；预算 3 时只重开 3 次即耗尽 |
 | `unit_camera_reconnect_stop` | 重连等待期间设置停止标志，返回 End 且不再尝试重开 |
 | `unit_camera_bad_frame_sequence` | 坏帧计为 DataError，不做判定；后续好帧序号继续递增 |
+| `unit_camera_read_stop` | 3 秒读超时中设置停止，poll 分片使等待在 1 秒内结束 |
+| `unit_camera_source_external_stop` | 停止标志传递到后端，阻塞读返回 End 而非错误 |
+| `threaded_external_stop_drains` | `max_input_frames=0` 时持续运行，停止后排空已接收帧 |
+| `cli_signal` | 图片批量模式收到 SIGINT 以 130 终止，不再被摄像头处理器吞掉 |
 
 ## 6. 验证
 
@@ -109,7 +142,7 @@ summary: total=5 ok=0 ng=4 errors=1 reconnect_count=0 stopped=0
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **53/53 通过**；无模型/图片/摄像头时 50 个测试通过。
+本次完整套件 **59/59 通过**；无模型/图片/摄像头时 56 个测试通过。
 
 ## 7. 限制与待确认
 
@@ -118,6 +151,8 @@ ctest --test-dir build --output-on-failure
 2. 队列满时等待只证明应用层背压，**不能证明 V4L2 驱动没有丢帧**；驱动丢帧
    需要实机统计/驱动计数。
 3. 重连只覆盖运行中的设备失联；首次打开失败直接报错退出，不重试。
-4. `--max-frames` 统计输入项，坏帧也占一项，因此 OK/NG/错误之和等于总项数。
+4. `--max-frames` 统计输入项，坏帧也占一项，因此 OK/NG/错误之和等于总项数；
+   省略时为连续模式，只能由 Ctrl+C 或致命源错误结束。
 5. 重连和故障测试均为脚本化模拟；真实设备上的重连、MJPG、占用等仍需实机。
-6. 可视化留到 5C；当前只打印每帧状态与汇总。
+6. SIGINT 仅由摄像头模式接管；图片/单图模式保持系统默认的中断行为。
+7. 可视化留到 5C；当前只打印每帧状态与汇总。
