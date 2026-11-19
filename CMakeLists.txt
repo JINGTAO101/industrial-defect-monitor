@@ -218,7 +218,11 @@ if(BUILD_TESTING)
             camera_missing_device
             camera_timeout
             camera_invalid_options
-            camera_frame_conversion)
+            camera_frame_conversion
+            camera_buffer_validation
+            camera_busy_error
+            camera_read_deadline
+            camera_colorimetry)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
     endforeach()
 

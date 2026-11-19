@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,9 +28,52 @@ struct CameraInfo {
     std::string actual_format;
     int actual_width = 0;
     int actual_height = 0;
-    double actual_fps = 0.0;
+    double actual_fps = 0.0;  // <= 0 means the driver value is unknown
     int bytes_per_line = 0;
+    std::string colorspace;
+    std::string ycbcr_encoding;
+    std::string quantization;
 };
+
+// Initialization ioctl errors: EBUSY is always surfaced as "device busy",
+// permission errors distinctly, and other errors keep the caller's context.
+std::string cameraInitializationError(
+    const std::string& context,
+    const std::string& device,
+    int error_number);
+
+// Accepts only YUYV with BT.601/default chroma encoding and limited/default
+// quantization; all other colorimetry is rejected rather than mis-converted.
+bool supportedYuyvColorimetry(
+    std::uint32_t colorspace,
+    std::uint32_t ycbcr_encoding,
+    std::uint32_t quantization);
+
+// Validates a dequeued buffer before copying it. Error-flagged, empty and
+// overlength frames are rejected; the caller still requeues valid indices.
+bool validateCameraBuffer(
+    bool error_flag,
+    std::size_t index,
+    std::size_t buffer_count,
+    std::size_t bytesused,
+    std::size_t buffer_length,
+    std::string& error);
+
+enum class CameraReadResult { FrameReady, Timeout, Error };
+
+struct CameraReadOps {
+    // > 0 ready, 0 timeout, -1 error with error_number (EINTR is retried by
+    // the helper using the remaining deadline, not a fresh full timeout).
+    std::function<int(int timeout_ms, int& error_number)> poll;
+    // 0 success, -1 error with error_number (EAGAIN/EINTR retried until the
+    // shared deadline expires).
+    std::function<int(int& error_number)> dequeue;
+};
+
+CameraReadResult waitForCameraFrame(
+    const CameraReadOps& operations,
+    int timeout_ms,
+    std::string& error);
 
 std::string normalizeCameraFormat(const std::string& format);
 bool isSupportedCameraFormat(const std::string& format);

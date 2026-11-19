@@ -1129,10 +1129,17 @@ int runCapture(const Options& options)
               << " @ " << info.requested_fps << " fps timeout="
               << options.camera_timeout_ms << " ms\n";
     std::cout << "actual: " << info.actual_format << " "
-              << info.actual_width << "x" << info.actual_height << " @ "
-              << std::fixed << std::setprecision(3) << info.actual_fps
-              << std::defaultfloat << " fps bytes_per_line="
-              << info.bytes_per_line << "\n";
+              << info.actual_width << "x" << info.actual_height << " @ ";
+    if (info.actual_fps > 0.0) {
+        std::cout << std::fixed << std::setprecision(3) << info.actual_fps
+                  << std::defaultfloat;
+    } else {
+        std::cout << "unknown";
+    }
+    std::cout << " fps bytes_per_line=" << info.bytes_per_line
+              << " colorspace=" << info.colorspace
+              << " ycbcr=" << info.ycbcr_encoding
+              << " quantization=" << info.quantization << "\n";
 
     std::size_t captured = 0;
     std::size_t first_index = 0;
@@ -1164,8 +1171,14 @@ int runCapture(const Options& options)
     std::cout << "camera capture complete: device=" << info.device
               << " format=" << info.actual_format
               << " size=" << info.actual_width << "x" << info.actual_height
-              << " fps=" << info.actual_fps
-              << " frames=" << captured << " index_range="
+              << " fps=";
+    if (info.actual_fps > 0.0) {
+        std::cout << std::fixed << std::setprecision(3) << info.actual_fps
+                  << std::defaultfloat;
+    } else {
+        std::cout << "unknown";
+    }
+    std::cout << " frames=" << captured << " index_range="
               << first_index << ".." << last_index << "\n";
     return 0;
 }

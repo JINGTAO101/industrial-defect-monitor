@@ -142,10 +142,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 42 个测试（单元测试 + CLI 失败路径 + 空检测 +
-路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时）；提供
-`EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外
-运行六图对照、对照守卫和线程化批量对照测试，共 45 个。本次验证 45/45 通过。
+不提供真实模型路径时运行 46 个测试（单元测试 + CLI 失败路径 + 空检测 +
+路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩）；
+提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON`
+时额外运行六图对照、对照守卫和线程化批量对照测试，共 49 个。本次验证
+49/49 通过。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -186,12 +187,16 @@ ctest --test-dir build --output-on-failure
 - `threaded_batch_reference`：六图真实模型批量顺序/检测结果与参考对照（可选）。
 - `--queue-capacity=-1` 与超出 `size_t` 的容量值会在 CLI 解析阶段返回 2。
 
-任务 5A 新增 5 个不需要摄像头的测试：
+任务 5A 新增 9 个不需要摄像头的测试：
 
 - `camera_missing_device`：设备不存在时明确报错；
 - `camera_timeout`：注入超时 backend，验证 `next()` 返回 timeout；
 - `camera_invalid_options`：不支持的像素格式被拒绝；
 - `camera_frame_conversion`：2×2 YUYV 注入帧转 BGR、序号和时间戳；
+- `camera_buffer_validation`：`V4L2_BUF_FLAG_ERROR`、空帧、超长帧、非法索引；
+- `camera_busy_error`：初始化 EBUSY 统一归类为 device busy；
+- `camera_read_deadline`：poll EINTR / DQBUF EAGAIN 共用截止时间；
+- `camera_colorimetry`：仅接受 BT.601/limited（含 default 映射），拒绝其他；
 - `cli_camera`：无设备、缺少参数/非法帧数/格式/尺寸及错误组合。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
@@ -243,6 +248,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── threaded-pipeline.md           # 任务 4B 三线程流水线与故障/积压记录
 │   ├── v4l2-camera.md                 # 任务 5A V4L2 采集与虚拟设备证据
 │   ├── v4l2-capture-run.txt           # vivid 30 帧采集日志
+│   ├── v4l2-verification.txt          # 5A 干净构建、49 项测试和故障回归
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -345,10 +351,13 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
 - `--capture-only --max-frames N` 不需要模型；设备不存在、占用、格式/帧率
   不支持、读取超时都有可区分错误并以非零退出。
 - 30 帧采集使用 vivid 虚拟设备验证：`/dev/video0`、YUYV 640x480 @30，
-  序号 0..29，退出码 0。
+  序号 0..29，退出码 0；坏帧标志被拒绝、缓冲区归还后恢复正常采集，设备
+  占用明确报告 busy。
 - **AT-009 真实 USB 摄像头直通待实机验证**：当前 `lsusb` 无摄像头，VMware
   未直通；vivid 日志仅用于实现验证。
-- 自动测试 5 个，均不依赖摄像头；完整套件 45/45，通过。
+- 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
+  `docs/v4l2-capture-run.txt`。
+- 自动测试 9 个，均不依赖摄像头；完整套件 49/49，通过。
 
 ## 验收记录（2B/3）
 
@@ -365,7 +374,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 45
+100% tests passed, 0 tests failed out of 49
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45

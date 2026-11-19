@@ -42,6 +42,54 @@ std::string fourccToString(std::uint32_t fourcc)
     return text;
 }
 
+std::string colorspaceToString(std::uint32_t colorspace)
+{
+    switch (colorspace) {
+        case V4L2_COLORSPACE_DEFAULT:
+            return "default";
+        case V4L2_COLORSPACE_SRGB:
+            return "sRGB";
+        case V4L2_COLORSPACE_JPEG:
+            return "JPEG";
+        case V4L2_COLORSPACE_REC709:
+            return "Rec.709";
+        default:
+            return "colorspace(" + std::to_string(colorspace) + ")";
+    }
+}
+
+std::string ycbcrEncodingToString(std::uint32_t encoding)
+{
+    switch (encoding) {
+        case V4L2_YCBCR_ENC_DEFAULT:
+            return "default";
+        case V4L2_YCBCR_ENC_601:
+            return "BT.601";
+        case V4L2_YCBCR_ENC_709:
+            return "BT.709";
+        case V4L2_YCBCR_ENC_XV601:
+            return "xvYCC 601";
+        case V4L2_YCBCR_ENC_XV709:
+            return "xvYCC 709";
+        default:
+            return "encoding(" + std::to_string(encoding) + ")";
+    }
+}
+
+std::string quantizationToString(std::uint32_t quantization)
+{
+    switch (quantization) {
+        case V4L2_QUANTIZATION_DEFAULT:
+            return "default";
+        case V4L2_QUANTIZATION_FULL_RANGE:
+            return "full";
+        case V4L2_QUANTIZATION_LIM_RANGE:
+            return "limited";
+        default:
+            return "quantization(" + std::to_string(quantization) + ")";
+    }
+}
+
 bool validateOptions(
     const CameraOptions& options,
     CameraInfo& info,
@@ -198,10 +246,11 @@ public:
         format.fmt.pix.pixelformat = fourcc;
         format.fmt.pix.field = V4L2_FIELD_ANY;
         if (xioctl(VIDIOC_S_FMT, &format) < 0) {
-            error = "camera format not supported: requested " +
-                    requested_format + " " + std::to_string(options.width) +
-                    "x" + std::to_string(options.height) + ": " +
-                    errnoMessage(errno);
+            error = cameraInitializationError(
+                "camera format not supported: requested " + requested_format +
+                    " " + std::to_string(options.width) + "x" +
+                    std::to_string(options.height),
+                options.device, errno);
             close();
             return false;
         }
@@ -209,6 +258,18 @@ public:
             error = "camera format not supported: requested " +
                     requested_format + ", driver selected " +
                     fourccToString(format.fmt.pix.pixelformat);
+            close();
+            return false;
+        }
+        if (fourcc == V4L2_PIX_FMT_YUYV &&
+            !supportedYuyvColorimetry(format.fmt.pix.colorspace,
+                                      format.fmt.pix.ycbcr_enc,
+                                      format.fmt.pix.quantization)) {
+            error = "camera YUYV colorimetry not supported: colorspace=" +
+                    colorspaceToString(format.fmt.pix.colorspace) +
+                    " ycbcr=" + ycbcrEncodingToString(format.fmt.pix.ycbcr_enc) +
+                    " quantization=" +
+                    quantizationToString(format.fmt.pix.quantization);
             close();
             return false;
         }
@@ -222,7 +283,12 @@ public:
         info_.actual_width = static_cast<int>(format.fmt.pix.width);
         info_.actual_height = static_cast<int>(format.fmt.pix.height);
         info_.bytes_per_line = static_cast<int>(format.fmt.pix.bytesperline);
-        info_.actual_fps = static_cast<double>(options.fps);
+        info_.colorspace = colorspaceToString(format.fmt.pix.colorspace);
+        info_.ycbcr_encoding =
+            ycbcrEncodingToString(format.fmt.pix.ycbcr_enc);
+        info_.quantization =
+            quantizationToString(format.fmt.pix.quantization);
+        info_.actual_fps = 0.0;
 
         v4l2_streamparm parameters{};
         parameters.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -230,9 +296,10 @@ public:
         parameters.parm.capture.timeperframe.denominator =
             static_cast<std::uint32_t>(options.fps);
         if (xioctl(VIDIOC_S_PARM, &parameters) < 0) {
-            error = "camera frame rate not supported: requested " +
-                    std::to_string(options.fps) + " fps: " +
-                    errnoMessage(errno);
+            error = cameraInitializationError(
+                "camera frame rate not supported: requested " +
+                    std::to_string(options.fps) + " fps",
+                options.device, errno);
             close();
             return false;
         }
@@ -253,7 +320,8 @@ public:
         request.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         request.memory = V4L2_MEMORY_MMAP;
         if (xioctl(VIDIOC_REQBUFS, &request) < 0) {
-            error = "camera buffer setup failed: " + errnoMessage(errno);
+            error = cameraInitializationError("camera buffer setup failed",
+                                              options.device, errno);
             close();
             return false;
         }
@@ -270,14 +338,16 @@ public:
             buffer.memory = V4L2_MEMORY_MMAP;
             buffer.index = index;
             if (xioctl(VIDIOC_QUERYBUF, &buffer) < 0) {
-                error = "camera buffer query failed: " + errnoMessage(errno);
+                error = cameraInitializationError("camera buffer query failed",
+                                                  options.device, errno);
                 close();
                 return false;
             }
             void* mapped = mmap(nullptr, buffer.length, PROT_READ | PROT_WRITE,
                                 MAP_SHARED, fd_, buffer.m.offset);
             if (mapped == MAP_FAILED) {
-                error = "camera buffer mmap failed: " + errnoMessage(errno);
+                error = cameraInitializationError("camera buffer mmap failed",
+                                                  options.device, errno);
                 close();
                 return false;
             }
@@ -289,7 +359,8 @@ public:
             queued.memory = V4L2_MEMORY_MMAP;
             queued.index = index;
             if (xioctl(VIDIOC_QBUF, &queued) < 0) {
-                error = "camera buffer queue failed: " + errnoMessage(errno);
+                error = cameraInitializationError("camera buffer queue failed",
+                                                  options.device, errno);
                 close();
                 return false;
             }
@@ -297,7 +368,8 @@ public:
 
         v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (xioctl(VIDIOC_STREAMON, &type) < 0) {
-            error = "camera stream start failed: " + errnoMessage(errno);
+            error = cameraInitializationError("camera stream start failed",
+                                              options.device, errno);
             close();
             return false;
         }
@@ -314,58 +386,62 @@ public:
             return false;
         }
 
-        pollfd descriptor{fd_, POLLIN, 0};
-        int poll_result = 0;
-        do {
-            poll_result = poll(&descriptor, 1, timeout_ms_);
-        } while (poll_result < 0 && errno == EINTR);
-        if (poll_result == 0) {
-            error = "camera read timeout after " +
-                    std::to_string(timeout_ms_) + " ms";
-            return false;
-        }
-        if (poll_result < 0) {
-            error = "camera poll failed: " + errnoMessage(errno);
-            return false;
-        }
-        if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-            error = "camera device error or hangup";
-            return false;
-        }
-
         v4l2_buffer buffer{};
-        buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buffer.memory = V4L2_MEMORY_MMAP;
-        if (xioctl(VIDIOC_DQBUF, &buffer) < 0) {
-            if (errno == EAGAIN) {
-                error = "camera read timeout after " +
-                        std::to_string(timeout_ms_) + " ms";
-            } else {
-                error = "camera dequeue failed: " + errnoMessage(errno);
+        CameraReadOps operations;
+        operations.poll = [this](int timeout_ms, int& error_number) {
+            pollfd descriptor{fd_, POLLIN, 0};
+            const int result = poll(&descriptor, 1, timeout_ms);
+            error_number = errno;
+            if (result > 0 &&
+                (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                error_number = EIO;
+                return -1;
             }
-            return false;
-        }
-        if (buffer.index >= buffers_.size()) {
-            error = "camera returned an invalid buffer index";
-            return false;
-        }
-        if (buffer.bytesused == 0 ||
-            buffer.bytesused > buffers_[buffer.index].length) {
-            error = "camera returned an invalid frame size";
+            return result;
+        };
+        operations.dequeue = [this, &buffer](int& error_number) {
+            buffer = v4l2_buffer{};
+            buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buffer.memory = V4L2_MEMORY_MMAP;
+            const int result = xioctl(VIDIOC_DQBUF, &buffer);
+            error_number = errno;
+            return result;
+        };
+
+        const CameraReadResult read_result =
+            waitForCameraFrame(operations, timeout_ms_, error);
+        if (read_result != CameraReadResult::FrameReady) {
             return false;
         }
 
-        const auto* data =
-            static_cast<const std::uint8_t*>(buffers_[buffer.index].start);
-        payload.assign(data, data + buffer.bytesused);
+        const std::size_t index = buffer.index;
+        const std::size_t buffer_length =
+            index < buffers_.size() ? buffers_[index].length : 0;
+        std::string buffer_error;
+        const bool valid = validateCameraBuffer(
+            (buffer.flags & V4L2_BUF_FLAG_ERROR) != 0, index,
+            buffers_.size(), buffer.bytesused, buffer_length, buffer_error);
 
-        v4l2_buffer requeue{};
-        requeue.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        requeue.memory = V4L2_MEMORY_MMAP;
-        requeue.index = buffer.index;
-        if (xioctl(VIDIOC_QBUF, &requeue) < 0) {
-            error = "failed to requeue camera buffer: " +
-                    errnoMessage(errno);
+        if (valid) {
+            const auto* data =
+                static_cast<const std::uint8_t*>(buffers_[index].start);
+            payload.assign(data, data + buffer.bytesused);
+        }
+
+        if (index < buffers_.size()) {
+            v4l2_buffer requeue{};
+            requeue.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            requeue.memory = V4L2_MEMORY_MMAP;
+            requeue.index = buffer.index;
+            if (xioctl(VIDIOC_QBUF, &requeue) < 0) {
+                error = "failed to requeue camera buffer: " +
+                        errnoMessage(errno);
+                return false;
+            }
+        }
+
+        if (!valid) {
+            error = buffer_error;
             return false;
         }
         return true;
@@ -425,6 +501,123 @@ private:
 };
 
 }  // namespace
+
+std::string cameraInitializationError(
+    const std::string& context,
+    const std::string& device,
+    int error_number)
+{
+    if (error_number == EBUSY) {
+        return "camera device busy: " + device + ": " +
+               errnoMessage(error_number);
+    }
+    if (error_number == EACCES || error_number == EPERM) {
+        return "camera permission denied: " + device + ": " +
+               errnoMessage(error_number);
+    }
+    return context + ": " + errnoMessage(error_number);
+}
+
+bool supportedYuyvColorimetry(
+    std::uint32_t colorspace,
+    std::uint32_t ycbcr_encoding,
+    std::uint32_t quantization)
+{
+    const bool colorspace_ok =
+        colorspace == V4L2_COLORSPACE_SRGB ||
+        colorspace == V4L2_COLORSPACE_DEFAULT;
+    const bool encoding_ok =
+        ycbcr_encoding == V4L2_YCBCR_ENC_DEFAULT ||
+        ycbcr_encoding == V4L2_YCBCR_ENC_601;
+    const bool quantization_ok =
+        quantization == V4L2_QUANTIZATION_DEFAULT ||
+        quantization == V4L2_QUANTIZATION_LIM_RANGE;
+    return colorspace_ok && encoding_ok && quantization_ok;
+}
+
+bool validateCameraBuffer(
+    bool error_flag,
+    std::size_t index,
+    std::size_t buffer_count,
+    std::size_t bytesused,
+    std::size_t buffer_length,
+    std::string& error)
+{
+    if (index >= buffer_count) {
+        error = "camera returned an invalid buffer index";
+        return false;
+    }
+    if (error_flag) {
+        error = "camera frame marked with V4L2_BUF_FLAG_ERROR";
+        return false;
+    }
+    if (bytesused == 0) {
+        error = "camera returned an empty frame";
+        return false;
+    }
+    if (bytesused > buffer_length) {
+        error = "camera returned an invalid frame size";
+        return false;
+    }
+    return true;
+}
+
+CameraReadResult waitForCameraFrame(
+    const CameraReadOps& operations,
+    int timeout_ms,
+    std::string& error)
+{
+    if (timeout_ms <= 0) {
+        error = "camera timeout must be greater than 0 ms";
+        return CameraReadResult::Error;
+    }
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (true) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            error = "camera read timeout after " + std::to_string(timeout_ms) +
+                    " ms";
+            return CameraReadResult::Timeout;
+        }
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   deadline - now)
+                                   .count();
+        const int remaining_ms =
+            static_cast<int>(std::max<long long>(1, remaining));
+
+        int poll_error = 0;
+        const int poll_result = operations.poll ? operations.poll(
+                                                    remaining_ms, poll_error)
+                                                : -1;
+        if (poll_result == 0) {
+            error = "camera read timeout after " + std::to_string(timeout_ms) +
+                    " ms";
+            return CameraReadResult::Timeout;
+        }
+        if (poll_result < 0) {
+            if (poll_error == EINTR) {
+                continue;
+            }
+            error = "camera poll failed: " + errnoMessage(poll_error);
+            return CameraReadResult::Error;
+        }
+
+        int dequeue_error = 0;
+        const int dequeue_result = operations.dequeue
+                                       ? operations.dequeue(dequeue_error)
+                                       : -1;
+        if (dequeue_result == 0) {
+            return CameraReadResult::FrameReady;
+        }
+        if (dequeue_error == EAGAIN || dequeue_error == EINTR) {
+            continue;
+        }
+        error = "camera dequeue failed: " + errnoMessage(dequeue_error);
+        return CameraReadResult::Error;
+    }
+}
+
 
 std::string normalizeCameraFormat(const std::string& format)
 {

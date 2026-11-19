@@ -50,36 +50,36 @@ Streaming Parameters Video Capture:
 $ ./build/bin/edge_ai --camera /dev/video0 --capture-only --max-frames 30 --camera-format YUYV --camera-width 640 --camera-height 480 --camera-fps 30
 camera: /dev/video0
 requested: YUYV 640x480 @ 30 fps timeout=2000 ms
-actual: YUYV 640x480 @ 30.000 fps bytes_per_line=1280
-frame 0: 640x480 channels=3 timestamp_ms=1795062803580
-frame 1: 640x480 channels=3 timestamp_ms=1795062803608
-frame 2: 640x480 channels=3 timestamp_ms=1795062803643
-frame 3: 640x480 channels=3 timestamp_ms=1795062803676
-frame 4: 640x480 channels=3 timestamp_ms=1795062803709
-frame 5: 640x480 channels=3 timestamp_ms=1795062803743
-frame 6: 640x480 channels=3 timestamp_ms=1795062803776
-frame 7: 640x480 channels=3 timestamp_ms=1795062803809
-frame 8: 640x480 channels=3 timestamp_ms=1795062803843
-frame 9: 640x480 channels=3 timestamp_ms=1795062803876
-frame 10: 640x480 channels=3 timestamp_ms=1795062803909
-frame 11: 640x480 channels=3 timestamp_ms=1795062803942
-frame 12: 640x480 channels=3 timestamp_ms=1795062803976
-frame 13: 640x480 channels=3 timestamp_ms=1795062804009
-frame 14: 640x480 channels=3 timestamp_ms=1795062804044
-frame 15: 640x480 channels=3 timestamp_ms=1795062804076
-frame 16: 640x480 channels=3 timestamp_ms=1795062804109
-frame 17: 640x480 channels=3 timestamp_ms=1795062804143
-frame 18: 640x480 channels=3 timestamp_ms=1795062804176
-frame 19: 640x480 channels=3 timestamp_ms=1795062804209
-frame 20: 640x480 channels=3 timestamp_ms=1795062804243
-frame 21: 640x480 channels=3 timestamp_ms=1795062804276
-frame 22: 640x480 channels=3 timestamp_ms=1795062804309
-frame 23: 640x480 channels=3 timestamp_ms=1795062804343
-frame 24: 640x480 channels=3 timestamp_ms=1795062804376
-frame 25: 640x480 channels=3 timestamp_ms=1795062804408
-frame 26: 640x480 channels=3 timestamp_ms=1795062804443
-frame 27: 640x480 channels=3 timestamp_ms=1795062804476
-frame 28: 640x480 channels=3 timestamp_ms=1795062804509
-frame 29: 640x480 channels=3 timestamp_ms=1795062804543
-camera capture complete: device=/dev/video0 format=YUYV size=640x480 fps=30 frames=30 index_range=0..29
+actual: YUYV 640x480 @ 30.000 fps bytes_per_line=1280 colorspace=sRGB ycbcr=default quantization=default
+frame 0: 640x480 channels=3 timestamp_ms=1795064108311
+frame 1: 640x480 channels=3 timestamp_ms=1795064108342
+frame 2: 640x480 channels=3 timestamp_ms=1795064108376
+frame 3: 640x480 channels=3 timestamp_ms=1795064108408
+frame 4: 640x480 channels=3 timestamp_ms=1795064108442
+frame 5: 640x480 channels=3 timestamp_ms=1795064108476
+frame 6: 640x480 channels=3 timestamp_ms=1795064108509
+frame 7: 640x480 channels=3 timestamp_ms=1795064108542
+frame 8: 640x480 channels=3 timestamp_ms=1795064108576
+frame 9: 640x480 channels=3 timestamp_ms=1795064108609
+frame 10: 640x480 channels=3 timestamp_ms=1795064108642
+frame 11: 640x480 channels=3 timestamp_ms=1795064108676
+frame 12: 640x480 channels=3 timestamp_ms=1795064108709
+frame 13: 640x480 channels=3 timestamp_ms=1795064108743
+frame 14: 640x480 channels=3 timestamp_ms=1795064108776
+frame 15: 640x480 channels=3 timestamp_ms=1795064108810
+frame 16: 640x480 channels=3 timestamp_ms=1795064108842
+frame 17: 640x480 channels=3 timestamp_ms=1795064108876
+frame 18: 640x480 channels=3 timestamp_ms=1795064108909
+frame 19: 640x480 channels=3 timestamp_ms=1795064108943
+frame 20: 640x480 channels=3 timestamp_ms=1795064108976
+frame 21: 640x480 channels=3 timestamp_ms=1795064109011
+frame 22: 640x480 channels=3 timestamp_ms=1795064109042
+frame 23: 640x480 channels=3 timestamp_ms=1795064109077
+frame 24: 640x480 channels=3 timestamp_ms=1795064109109
+frame 25: 640x480 channels=3 timestamp_ms=1795064109144
+frame 26: 640x480 channels=3 timestamp_ms=1795064109176
+frame 27: 640x480 channels=3 timestamp_ms=1795064109210
+frame 28: 640x480 channels=3 timestamp_ms=1795064109242
+frame 29: 640x480 channels=3 timestamp_ms=1795064109276
+camera capture complete: device=/dev/video0 format=YUYV size=640x480 fps=30.000 frames=30 index_range=0..29
 # exit code: 0

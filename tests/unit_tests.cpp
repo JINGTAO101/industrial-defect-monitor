@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <linux/videodev2.h>
 
 #include "image_preprocess.hpp"
 #include "camera_source.hpp"
@@ -640,6 +641,133 @@ bool testImageSourceDirectory(std::string& error)
                   error);
 }
 
+bool testCameraBufferValidation(std::string& error)
+{
+    std::string buffer_error;
+    if (!expect(!edge_ai::validateCameraBuffer(
+                    true, 0, 4, 100, 100, buffer_error),
+                "error-flagged camera buffer was accepted", error) ||
+        !expect(buffer_error.find("V4L2_BUF_FLAG_ERROR") != std::string::npos,
+                "error-flag diagnostic is unclear: " + buffer_error, error) ||
+        !expect(!edge_ai::validateCameraBuffer(
+                    false, 0, 4, 0, 100, buffer_error),
+                "empty camera buffer was accepted", error) ||
+        !expect(!edge_ai::validateCameraBuffer(
+                    false, 0, 4, 101, 100, buffer_error),
+                "overlength camera buffer was accepted", error) ||
+        !expect(!edge_ai::validateCameraBuffer(
+                    false, 4, 4, 100, 100, buffer_error),
+                "invalid camera buffer index was accepted", error)) {
+        return false;
+    }
+    return expect(edge_ai::validateCameraBuffer(
+                      false, 0, 4, 100, 100, buffer_error),
+                  "valid camera buffer was rejected: " + buffer_error, error);
+}
+
+bool testCameraBusyError(std::string& error)
+{
+    const std::string busy = edge_ai::cameraInitializationError(
+        "camera format not supported", "/dev/video0", EBUSY);
+    const std::string permission = edge_ai::cameraInitializationError(
+        "camera format not supported", "/dev/video0", EACCES);
+    return expect(busy.find("camera device busy") != std::string::npos,
+                  "EBUSY was not classified as device busy: " + busy,
+                  error) &&
+           expect(permission.find("camera permission denied") !=
+                      std::string::npos,
+                  "EACCES was not classified as permission denied: " +
+                      permission,
+                  error);
+}
+
+bool testCameraReadDeadline(std::string& error)
+{
+    {
+        edge_ai::CameraReadOps operations;
+        operations.poll = [](int, int& error_number) {
+            error_number = EINTR;
+            return -1;
+        };
+        operations.dequeue = [](int&) { return 0; };
+        const auto start = std::chrono::steady_clock::now();
+        std::string read_error;
+        const edge_ai::CameraReadResult result =
+            edge_ai::waitForCameraFrame(operations, 50, read_error);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - start)
+                                 .count();
+        if (!expect(result == edge_ai::CameraReadResult::Timeout,
+                    "EINTR poll loop did not time out: " + read_error, error) ||
+            !expect(read_error.find("timeout") != std::string::npos,
+                    "timeout diagnostic is unclear: " + read_error, error) ||
+            !expect(elapsed < 1000, "EINTR poll loop exceeded its deadline",
+                    error)) {
+            return false;
+        }
+    }
+    {
+        edge_ai::CameraReadOps operations;
+        operations.poll = [](int, int&) { return 1; };
+        operations.dequeue = [](int& error_number) {
+            error_number = EAGAIN;
+            return -1;
+        };
+        const auto start = std::chrono::steady_clock::now();
+        std::string read_error;
+        const edge_ai::CameraReadResult result =
+            edge_ai::waitForCameraFrame(operations, 50, read_error);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - start)
+                                 .count();
+        if (!expect(result == edge_ai::CameraReadResult::Timeout,
+                    "EAGAIN dequeue loop did not time out: " + read_error,
+                    error) ||
+            !expect(elapsed >= 20,
+                    "EAGAIN dequeue returned before the deadline", error)) {
+            return false;
+        }
+    }
+    edge_ai::CameraReadOps operations;
+    int dequeue_calls = 0;
+    operations.poll = [](int, int&) { return 1; };
+    operations.dequeue = [&dequeue_calls](int& error_number) {
+        if (++dequeue_calls == 1) {
+            error_number = EAGAIN;
+            return -1;
+        }
+        return 0;
+    };
+    std::string read_error;
+    return expect(edge_ai::waitForCameraFrame(operations, 50, read_error) ==
+                      edge_ai::CameraReadResult::FrameReady,
+                  "dequeue EAGAIN was not retried: " + read_error, error);
+}
+
+bool testCameraColorimetry(std::string& error)
+{
+    return expect(edge_ai::supportedYuyvColorimetry(
+                      V4L2_COLORSPACE_SRGB, V4L2_YCBCR_ENC_601,
+                      V4L2_QUANTIZATION_LIM_RANGE),
+                  "BT.601 limited YUYV was rejected", error) &&
+           expect(edge_ai::supportedYuyvColorimetry(
+                      V4L2_COLORSPACE_DEFAULT, V4L2_YCBCR_ENC_DEFAULT,
+                      V4L2_QUANTIZATION_DEFAULT),
+                  "default YUYV colorimetry was rejected", error) &&
+           expect(!edge_ai::supportedYuyvColorimetry(
+                      V4L2_COLORSPACE_SRGB, V4L2_YCBCR_ENC_601,
+                      V4L2_QUANTIZATION_FULL_RANGE),
+                  "full-range YUYV was accepted", error) &&
+           expect(!edge_ai::supportedYuyvColorimetry(
+                      V4L2_COLORSPACE_SRGB, V4L2_YCBCR_ENC_709,
+                      V4L2_QUANTIZATION_LIM_RANGE),
+                  "BT.709 YUYV was accepted", error) &&
+           expect(!edge_ai::supportedYuyvColorimetry(
+                      V4L2_COLORSPACE_JPEG, V4L2_YCBCR_ENC_601,
+                      V4L2_QUANTIZATION_LIM_RANGE),
+                  "JPEG colorspace YUYV was accepted", error);
+}
+
 class FakeTimeoutCameraBackend final : public edge_ai::CameraBackend {
 public:
     FakeTimeoutCameraBackend()
@@ -844,6 +972,10 @@ int main(int argc, char* argv[])
         {"camera_timeout", testCameraTimeout},
         {"camera_invalid_options", testCameraInvalidOptions},
         {"camera_frame_conversion", testCameraFrameConversion},
+        {"camera_buffer_validation", testCameraBufferValidation},
+        {"camera_busy_error", testCameraBusyError},
+        {"camera_read_deadline", testCameraReadDeadline},
+        {"camera_colorimetry", testCameraColorimetry},
     };
 
     std::string filter;
