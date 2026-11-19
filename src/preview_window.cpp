@@ -1,6 +1,5 @@
 #include "preview_window.hpp"
 
-#include <algorithm>
 #include <exception>
 #include <utility>
 
@@ -23,14 +22,23 @@ public:
                 window_created_ = true;
             }
             cv::imshow(title_, annotated);
-            const int key = cv::waitKey(1);
-            if (key == 27 || key == 'q' || key == 'Q') {
-                return PreviewStatus::Closed;
-            }
-            if (cv::getWindowProperty(title_, cv::WND_PROP_VISIBLE) < 1.0) {
-                return PreviewStatus::Closed;
-            }
+            return processEvents(error);
+        } catch (const cv::Exception& exception) {
+            error = std::string("preview display failed: ") + exception.what();
+            return PreviewStatus::Error;
+        } catch (const std::exception& exception) {
+            error = std::string("preview display failed: ") + exception.what();
+            return PreviewStatus::Error;
+        }
+    }
+
+    PreviewStatus poll(std::string& error) override
+    {
+        if (!window_created_) {
             return PreviewStatus::Ok;
+        }
+        try {
+            return processEvents(error);
         } catch (const cv::Exception& exception) {
             error = std::string("preview display failed: ") + exception.what();
             return PreviewStatus::Error;
@@ -54,6 +62,20 @@ public:
     }
 
 private:
+    PreviewStatus processEvents(std::string& error)
+    {
+        // waitKey(1) pumps the Qt event queue even when no new image arrives.
+        const int key = cv::waitKey(1);
+        if (key == 27 || key == 'q' || key == 'Q') {
+            return PreviewStatus::Closed;
+        }
+        if (cv::getWindowProperty(title_, cv::WND_PROP_VISIBLE) < 1.0) {
+            return PreviewStatus::Closed;
+        }
+        (void)error;
+        return PreviewStatus::Ok;
+    }
+
     std::string title_;
     bool window_created_ = false;
 };
@@ -122,7 +144,8 @@ PreviewWindow::~PreviewWindow()
 
 bool PreviewWindow::start(std::string& error)
 {
-    if (thread_.joinable()) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (started_) {
         error = "preview window is already started";
         return false;
     }
@@ -130,33 +153,71 @@ bool PreviewWindow::start(std::string& error)
         error = "preview sink is null";
         return false;
     }
-    try {
-        thread_ = std::thread([this] { run(); });
-    } catch (const std::exception& exception) {
-        error = std::string("failed to start preview thread: ") +
-                exception.what();
-        return false;
-    }
+    started_ = true;
     return true;
 }
 
 void PreviewWindow::submit(cv::Mat image, AnnotationInput input)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!started_ || stopping_ || finished_) {
+        return;
+    }
+    if (pending_) {
+        // Capacity is exactly one frame: keep the newest preview and count
+        // the skipped one. Detection processing is unaffected.
+        ++dropped_;
+    }
+    pending_ =
+        std::make_unique<Pending>(Pending{std::move(image), std::move(input)});
+    ++submitted_;
+}
+
+void PreviewWindow::pump()
+{
+    std::unique_ptr<Pending> pending;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_ || finished_) {
+        if (!started_ || stopping_ || finished_) {
             return;
         }
         if (pending_) {
-            // Capacity is exactly one frame: keep the newest preview and
-            // count the skipped one. Detection processing is unaffected.
-            ++dropped_;
+            pending = std::move(pending_);
         }
-        pending_ = std::make_unique<Pending>(
-            Pending{std::move(image), std::move(input)});
-        ++submitted_;
     }
-    condition_.notify_one();
+
+    std::string error;
+    PreviewStatus status = PreviewStatus::Ok;
+    bool had_frame = pending != nullptr;
+    try {
+        if (had_frame) {
+            const cv::Mat annotated =
+                annotateFrame(pending->image, pending->input);
+            if (annotated.empty()) {
+                finish(PreviewStatus::Error,
+                       "preview frame is empty or has an unsupported format");
+                return;
+            }
+            status = sink_->show(annotated, error);
+        } else {
+            status = sink_->poll(error);
+        }
+    } catch (const std::exception& exception) {
+        status = PreviewStatus::Error;
+        error = std::string("preview display failed: ") + exception.what();
+    } catch (...) {
+        status = PreviewStatus::Error;
+        error = "preview display failed: unknown exception";
+    }
+
+    if (status == PreviewStatus::Ok) {
+        if (had_frame) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++shown_;
+        }
+        return;
+    }
+    finish(status, error);
 }
 
 void PreviewWindow::close()
@@ -165,10 +226,6 @@ void PreviewWindow::close()
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = true;
         pending_.reset();
-    }
-    condition_.notify_all();
-    if (thread_.joinable()) {
-        thread_.join();
     }
     closeSink();
 }
@@ -192,10 +249,31 @@ bool PreviewWindow::failed() const
     return failed_;
 }
 
+bool PreviewWindow::finished() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return finished_ || stopping_;
+}
+
 std::string PreviewWindow::failure() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return failure_;
+}
+
+void PreviewWindow::finish(PreviewStatus status, const std::string& error)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        finished_ = true;
+        if (status == PreviewStatus::Closed) {
+            closed_by_user_ = true;
+        } else {
+            failed_ = true;
+            failure_ = error.empty() ? "preview display failed" : error;
+        }
+    }
+    requestStop();
 }
 
 void PreviewWindow::requestStop()
@@ -212,71 +290,8 @@ void PreviewWindow::closeSink()
     }
     bool expected = false;
     if (sink_closed_.compare_exchange_strong(expected, true)) {
-        // Run on the preview thread whenever it exists: highgui window
-        // creation and destruction should stay on one thread.
         sink_->close();
     }
-}
-
-void PreviewWindow::run()
-{
-    while (true) {
-        Pending pending;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            condition_.wait(lock, [this] {
-                return stopping_ || pending_ != nullptr;
-            });
-            if (stopping_) {
-                break;
-            }
-            pending = std::move(*pending_);
-            pending_.reset();
-        }
-
-        const cv::Mat annotated =
-            annotateFrame(pending.image, pending.input);
-        if (annotated.empty()) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            failed_ = true;
-            failure_ = "preview frame is empty or has an unsupported format";
-            finished_ = true;
-            requestStop();
-            break;
-        }
-
-        std::string show_error;
-        PreviewStatus status = PreviewStatus::Error;
-        try {
-            status = sink_->show(annotated, show_error);
-        } catch (const std::exception& exception) {
-            show_error = std::string("preview display failed: ") +
-                         exception.what();
-        } catch (...) {
-            show_error = "preview display failed: unknown exception";
-        }
-
-        if (status == PreviewStatus::Ok) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            ++shown_;
-            continue;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            finished_ = true;
-            if (status == PreviewStatus::Closed) {
-                closed_by_user_ = true;
-            } else {
-                failed_ = true;
-                failure_ = show_error.empty() ? "preview display failed"
-                                             : show_error;
-            }
-        }
-        requestStop();
-        break;
-    }
-    closeSink();
 }
 
 }  // namespace edge_ai

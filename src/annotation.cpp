@@ -73,37 +73,149 @@ bool normalizedBox(const Detection& detection,
     return true;
 }
 
-void drawLabel(cv::Mat& image,
-               const std::string& text,
-               int x,
-               int baseline_y,
-               const cv::Scalar& color,
-               const AnnotationStyle& style)
+constexpr int kLabelPadding = 3;
+
+struct LabelGeometry {
+    cv::Size text_size;
+    int baseline = 0;
+    int width = 0;
+    int height = 0;
+};
+
+LabelGeometry labelGeometry(const std::string& text,
+                            const AnnotationStyle& style)
 {
+    LabelGeometry geometry;
+    geometry.text_size = cv::getTextSize(
+        text, cv::FONT_HERSHEY_SIMPLEX, style.font_scale,
+        style.font_thickness, &geometry.baseline);
+    geometry.width = geometry.text_size.width + 2 * kLabelPadding;
+    geometry.height = geometry.text_size.height + geometry.baseline +
+                      2 * kLabelPadding;
+    return geometry;
+}
+
+cv::Rect clampedLabel(const cv::Rect& label, int image_width)
+{
+    cv::Rect result = label;
+    result.width = std::min(result.width, image_width);
+    result.x = std::clamp(result.x, 0, std::max(0, image_width - result.width));
+    return result;
+}
+
+bool overlaps(const cv::Rect& first, const cv::Rect& second)
+{
+    return (first & second).area() > 0;
+}
+
+cv::Rect statusRect(const cv::Size& size,
+                    const AnnotationInput& input,
+                    const AnnotationStyle& style)
+{
+    const std::string status = statusText(input);
     int baseline = 0;
     const cv::Size text_size =
-        cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, style.font_scale,
-                        style.font_thickness, &baseline);
-    const int padding = 3;
-    int left = std::max(0, x);
-    int top = baseline_y - text_size.height - padding;
-    const int max_width = std::max(0, image.cols - left);
-    const int width = std::min(text_size.width + 2 * padding, max_width);
-    const int height = std::min(text_size.height + baseline + 2 * padding,
-                                std::max(0, image.rows - top));
-    if (width > 0 && height > 0) {
-        cv::rectangle(image, cv::Rect(left, std::max(0, top), width, height),
-                      color, cv::FILLED);
+        cv::getTextSize(status, cv::FONT_HERSHEY_SIMPLEX,
+                        style.font_scale * 1.2, style.font_thickness + 1,
+                        &baseline);
+    const int width =
+        std::min(size.width, text_size.width + 2 * kStatusMargin);
+    const int height =
+        std::min(size.height, text_size.height + baseline +
+                                  2 * kStatusPadding);
+    return cv::Rect(0, 0, std::max(0, width), std::max(0, height));
+}
+
+void drawLabelAt(cv::Mat& image,
+                 const std::string& text,
+                 const cv::Rect& label,
+                 const cv::Scalar& color,
+                 const AnnotationStyle& style)
+{
+    if (label.width <= 0 || label.height <= 0) {
+        return;
     }
-    const int min_text_y = text_size.height + padding;
-    const int max_text_y = std::max(min_text_y, image.rows - padding);
-    const int text_y = std::clamp(baseline_y, min_text_y, max_text_y);
-    cv::putText(image, text, cv::Point(left + padding, text_y),
+    const LabelGeometry geometry = labelGeometry(text, style);
+    cv::rectangle(image, label, color, cv::FILLED);
+    cv::putText(image, text,
+                cv::Point(label.x + kLabelPadding,
+                          label.y + kLabelPadding + geometry.text_size.height),
                 cv::FONT_HERSHEY_SIMPLEX, style.font_scale,
                 cv::Scalar(255, 255, 255), style.font_thickness, cv::LINE_8);
 }
 
 }  // namespace
+
+AnnotationLayout computeAnnotationLayout(
+    const cv::Size& image_size,
+    const AnnotationInput& input,
+    const AnnotationStyle& style)
+{
+    AnnotationLayout layout;
+    layout.status = statusRect(image_size, input, style);
+    if (input.has_error || !input.quality_available) {
+        return layout;
+    }
+
+    for (const Detection& detection : input.detections) {
+        cv::Rect box;
+        if (!normalizedBox(detection, image_size.width, image_size.height,
+                           box)) {
+            continue;
+        }
+        const std::string text = confidenceLabel(detection);
+        const LabelGeometry geometry = labelGeometry(text, style);
+
+        const auto candidate = [&](int x, int top) {
+            return clampedLabel(
+                cv::Rect(x, top, geometry.width, geometry.height),
+                image_size.width);
+        };
+
+        std::vector<cv::Rect> placements;
+        placements.push_back(candidate(box.x, box.y - geometry.height - 2));
+        int inside_top = box.y + 2;
+        if (overlaps(candidate(box.x, inside_top), layout.status)) {
+            inside_top = layout.status.y + layout.status.height + 2;
+        }
+        placements.push_back(candidate(box.x, inside_top));
+        placements.push_back(
+            candidate(box.x, box.y + box.height + 2));
+        placements.push_back(
+            candidate(box.x, box.y + box.height - geometry.height - 2));
+        placements.push_back(
+            candidate(box.x + box.width + 3, box.y));
+        placements.push_back(
+            candidate(box.x - geometry.width - 3, box.y));
+        placements.push_back(
+            candidate(box.x, layout.status.y + layout.status.height + 2));
+
+        cv::Rect chosen;
+        bool found = false;
+        for (const cv::Rect& placement : placements) {
+            if (placement.y >= 0 &&
+                placement.y + placement.height <= image_size.height &&
+                !overlaps(placement, layout.status)) {
+                chosen = placement;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            // Dense/tiny images: keep the label inside the image and below
+            // the banner even if it must overlap content.
+            const int top = std::min(
+                std::max(0, layout.status.y + layout.status.height + 2),
+                std::max(0, image_size.height - geometry.height));
+            chosen = clampedLabel(
+                cv::Rect(box.x, top, geometry.width,
+                         std::min(geometry.height, image_size.height)),
+                image_size.width);
+        }
+        layout.labels.push_back(chosen);
+    }
+    return layout;
+}
 
 cv::Mat annotateFrame(const cv::Mat& image,
                       const AnnotationInput& input,
@@ -125,10 +237,13 @@ cv::Mat annotateFrame(const cv::Mat& image,
     }
 
     const cv::Scalar color = statusColor(input, style);
+    const AnnotationLayout layout =
+        computeAnnotationLayout(annotated.size(), input, style);
 
     // Detections are only drawn for completed quality decisions. A failed
     // frame shows ERROR only and must never imply an OK/NG result.
-    if (!input.has_error) {
+    if (!input.has_error && input.quality_available) {
+        std::size_t label_index = 0;
         for (const Detection& detection : input.detections) {
             cv::Rect box;
             if (!normalizedBox(detection, annotated.cols, annotated.rows,
@@ -137,39 +252,19 @@ cv::Mat annotateFrame(const cv::Mat& image,
             }
             cv::rectangle(annotated, box, color, style.box_thickness,
                           cv::LINE_8);
-            const std::string label = confidenceLabel(detection);
-            int baseline = 0;
-            const cv::Size text_size = cv::getTextSize(
-                label, cv::FONT_HERSHEY_SIMPLEX, style.font_scale,
-                style.font_thickness, &baseline);
-            // Keep the label background fully above the box when possible;
-            // otherwise place it just inside the top edge, leaving the box
-            // outline itself unobscured.
-            int label_y = box.y - baseline - 4;
-            if (label_y - text_size.height - 3 < 0) {
-                label_y = box.y + text_size.height + 4;
+            if (label_index < layout.labels.size()) {
+                drawLabelAt(annotated, confidenceLabel(detection),
+                            layout.labels[label_index++], color, style);
             }
-            drawLabel(annotated, label, box.x, label_y, color, style);
         }
     }
 
-    const std::string status = statusText(input);
-    int baseline = 0;
-    const cv::Size text_size =
-        cv::getTextSize(status, cv::FONT_HERSHEY_SIMPLEX,
-                        style.font_scale * 1.2, style.font_thickness + 1,
-                        &baseline);
-    const int banner_width =
-        std::min(annotated.cols,
-                 text_size.width + 2 * kStatusMargin);
-    const int banner_height =
-        std::min(annotated.rows,
-                 text_size.height + baseline + 2 * kStatusPadding);
-    if (banner_width > 0 && banner_height > 0) {
-        cv::rectangle(annotated, cv::Rect(0, 0, banner_width, banner_height),
-                      color, cv::FILLED);
-        cv::putText(annotated, status,
-                    cv::Point(kStatusMargin, banner_height - kStatusPadding),
+    // Draw the banner after labels; placement already guarantees no overlap.
+    if (layout.status.width > 0 && layout.status.height > 0) {
+        cv::rectangle(annotated, layout.status, color, cv::FILLED);
+        cv::putText(annotated, statusText(input),
+                    cv::Point(kStatusMargin,
+                              layout.status.height - kStatusPadding),
                     cv::FONT_HERSHEY_SIMPLEX, style.font_scale * 1.2,
                     cv::Scalar(255, 255, 255), style.font_thickness + 1,
                     cv::LINE_8);

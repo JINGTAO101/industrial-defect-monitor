@@ -159,7 +159,7 @@ ctest --test-dir build --output-on-failure
 | `unit_camera_colorimetry` | 仅 BT.601/limited（含 default）可用，其他被拒绝 |
 | `cli_camera` | 无设备、缺少 `--capture-only`/`--camera`、非法帧数/格式/尺寸、错误组合 |
 
-当前完整套件 **68/68 通过**；无模型/图片/摄像头时 65 个测试通过。干净
+当前完整套件 **71/71 通过**；无模型/图片/摄像头时 68 个测试通过。干净
 构建日志见 `docs/v4l2-verification.txt`。
 
 ## 6. 待确认 / 限制

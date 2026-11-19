@@ -238,9 +238,12 @@ if(BUILD_TESTING)
             camera_bad_frame_sequence
             annotation_ng_boxes
             annotation_error_frame
+            annotation_label_avoids_banner
+            annotation_label_right_edge
             annotation_save_png
             preview_drops_frames
             preview_close_stops
+            preview_closed_without_frames
             preview_error_stops)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
     endforeach()

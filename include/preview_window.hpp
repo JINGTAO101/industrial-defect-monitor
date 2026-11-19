@@ -1,12 +1,10 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 
 #include "annotation.hpp"
 
@@ -22,6 +20,13 @@ public:
     // Error with a diagnostic when the backend cannot display.
     virtual PreviewStatus show(const cv::Mat& annotated,
                                std::string& error) = 0;
+    // Processes window events when no new frame is available. This is what
+    // lets a close request be noticed while the camera is disconnected.
+    virtual PreviewStatus poll(std::string& error)
+    {
+        (void)error;
+        return PreviewStatus::Ok;
+    }
     virtual void close() noexcept {}
 };
 
@@ -43,10 +48,14 @@ struct PreviewStats {
     std::string failure;
 };
 
-// Bounded preview: only the newest pending frame is kept. submit() never
-// blocks on the window, so a slow display drops preview frames without
-// delaying detection results. Closing the window sets external_stop so the
-// camera pipeline drains exactly like 5B Ctrl+C.
+// Main-thread driven preview. All highgui calls happen from pump()/close(),
+// which must run on the thread that owns the window (the process main thread
+// for the CLI). submit() is called by the result thread and never blocks on
+// the window: at most one pending frame is kept, so a slow display skips
+// previews without delaying detection results.
+//
+// pump() also polls the sink when no frame is pending, so closing the window
+// still triggers the 5B external stop while the camera has no frames.
 class PreviewWindow {
 public:
     PreviewWindow(std::string title,
@@ -62,10 +71,12 @@ public:
 
     bool start(std::string& error);
     void submit(cv::Mat image, AnnotationInput input);
+    void pump();
     void close();
 
     PreviewStats stats() const;
     bool failed() const;
+    bool finished() const;
     std::string failure() const;
 
 private:
@@ -74,7 +85,7 @@ private:
         AnnotationInput input;
     };
 
-    void run();
+    void finish(PreviewStatus status, const std::string& error);
     void requestStop();
     void closeSink();
 
@@ -83,8 +94,8 @@ private:
     std::unique_ptr<PreviewSink> sink_;
 
     mutable std::mutex mutex_;
-    std::condition_variable condition_;
     std::unique_ptr<Pending> pending_;
+    bool started_ = false;
     bool stopping_ = false;
     bool finished_ = false;
     bool closed_by_user_ = false;
@@ -93,8 +104,6 @@ private:
     std::size_t submitted_ = 0;
     std::size_t shown_ = 0;
     std::size_t dropped_ = 0;
-
-    std::thread thread_;
     std::atomic<bool> sink_closed_{false};
 };
 

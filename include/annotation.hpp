@@ -29,6 +29,19 @@ struct AnnotationStyle {
     int box_thickness = 2;
 };
 
+// Placement chosen before drawing. labels[i] corresponds to the i-th valid
+// detection box (invalid/empty boxes are skipped). The status banner and
+// labels never overlap.
+struct AnnotationLayout {
+    cv::Rect status;
+    std::vector<cv::Rect> labels;
+};
+
+AnnotationLayout computeAnnotationLayout(
+    const cv::Size& image_size,
+    const AnnotationInput& input,
+    const AnnotationStyle& style = {});
+
 // Returns a new BGR image with boxes/labels and an OK/NG/ERROR banner. The
 // input image is never modified. Failed frames draw only ERROR; they never
 // draw a quality verdict or detections.

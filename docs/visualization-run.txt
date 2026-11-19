@@ -101,5 +101,50 @@ $ ./build/bin/edge_ai_threaded_tests threaded_preview_image_included
 # ---- Full suite ----
 
 $ ctest --test-dir build --output-on-failure
-100% tests passed, 0 tests failed out of 68
-# 65 tests run without external model/images.
+100% tests passed, 0 tests failed out of 71
+# 68 tests run without external model/images.
+
+# ---- Review-fix round: main-thread pump, display probe, label layout ----
+# This round had no /dev/video* node, so camera preview was not rerun.
+# The vivid preview statistics above are from the earlier 5C round; the
+# main-thread no-frame close path is covered by preview_closed_without_frames.
+
+$ env -u WAYLAND_DISPLAY -u QT_QPA_PLATFORM DISPLAY=:9999 \
+    ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png --display
+edge_ai: --display cannot open a window with the current
+DISPLAY/WAYLAND_DISPLAY; use --save-annotated for headless single-image output
+# exit code: 1 (no SIGABRT, no core file)
+
+$ ./build/bin/edge_ai_tests annotation_label_avoids_banner
+[PASS] annotation_label_avoids_banner
+$ ./build/bin/edge_ai_tests annotation_label_right_edge
+[PASS] annotation_label_right_edge
+$ ./build/bin/edge_ai_tests preview_closed_without_frames
+[PASS] preview_closed_without_frames
+
+$ ./build/bin/edge_ai --model ... \
+    --image docs/evidence/synthetic-non-square.png \
+    --save-annotated docs/evidence/annotated-non-square.png
+# top-left label now sits below the NG banner; 480x200 PNG regenerated.
+
+$ ./build/bin/edge_ai --model ... \
+    --image docs/evidence/synthetic-right-edge.png \
+    --save-annotated docs/evidence/annotated-right-edge.png
+detections: 3
+  pitted_surface conf=0.862909 bbox=[17.3074, 0, 396.557, 200]
+  scratches      conf=0.642606 bbox=[412.836, 22.2368, 480, 62.8815]
+  scratches      conf=0.556563 bbox=[399.962, 127.814, 479.931, 156.754]
+# labels remain inside the 480px right edge; box borders match JSON.
+file: PNG image data, 480 x 200, 8-bit/color RGB
+
+$ QT_QPA_PLATFORM=offscreen timeout 3s stdbuf -oL \
+    ./build/bin/edge_ai --model ... \
+    --image docs/evidence/synthetic-non-square.png --display
+detections: 2
+quality: NG (confidence>0.25, qualifying=2/2)
+# timeout 124: highgui still waiting for key/close; no abort.
+
+$ ctest --test-dir build -R cli_annotation --output-on-failure
+1/1 Test #68: cli_annotation ... Passed
+100% tests passed, 0 tests failed out of 1

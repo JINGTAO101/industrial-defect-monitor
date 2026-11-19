@@ -1,10 +1,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <csignal>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -13,9 +16,14 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/highgui.hpp>
 
 #include "annotation.hpp"
 #include "batch_processor.hpp"
@@ -43,24 +51,76 @@ void handleSigint(int)
     g_stop_requested.store(true);
 }
 
-// Qt's highgui aborts the whole process when it cannot load a platform
-// plugin (for example over SSH with no DISPLAY). Refuse --display up front
-// and point users at the headless save path instead.
-bool displayEnvironmentAvailable()
+// Qt's highgui calls abort() when it cannot load a platform plugin or
+// connect to DISPLAY (for example DISPLAY=:9999 over SSH). Probe in a child
+// process so that failure becomes a readable error instead of killing the
+// detector. offscreen is an explicit opt-in and needs no probe.
+bool validateDisplayBackend(std::string& error)
 {
     const char* platform = std::getenv("QT_QPA_PLATFORM");
-    if (platform != nullptr) {
-        const std::string value(platform);
-        if (value == "offscreen") {
-            return true;
-        }
-    }
-    const char* display = std::getenv("DISPLAY");
-    if (display != nullptr && display[0] != '\0') {
+    if (platform != nullptr && std::string(platform) == "offscreen") {
         return true;
     }
+
+    const char* display = std::getenv("DISPLAY");
     const char* wayland = std::getenv("WAYLAND_DISPLAY");
-    return wayland != nullptr && wayland[0] != '\0';
+    const bool has_display = display != nullptr && display[0] != '\0';
+    const bool has_wayland = wayland != nullptr && wayland[0] != '\0';
+    if (!has_display && !has_wayland) {
+        error = "--display requires DISPLAY/WAYLAND_DISPLAY or "
+                "QT_QPA_PLATFORM=offscreen; use --save-annotated for "
+                "headless single-image output";
+        return false;
+    }
+
+    const pid_t child = ::fork();
+    if (child < 0) {
+        error = std::string("cannot validate the display backend: ") +
+                std::strerror(errno);
+        return false;
+    }
+    if (child == 0) {
+        // Child: Qt diagnostics and any core dump stay out of the parent.
+        struct rlimit core_limit {};
+        core_limit.rlim_cur = 0;
+        core_limit.rlim_max = 0;
+        setrlimit(RLIMIT_CORE, &core_limit);
+        const int devnull = ::open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDOUT_FILENO);
+            ::dup2(devnull, STDERR_FILENO);
+            ::close(devnull);
+        }
+        ::alarm(3);
+        try {
+            const std::string probe_title = "edge_ai display probe";
+            cv::namedWindow(probe_title, cv::WINDOW_NORMAL);
+            const cv::Mat probe(2, 2, CV_8UC3, cv::Scalar(0, 0, 0));
+            cv::imshow(probe_title, probe);
+            cv::waitKey(1);
+            cv::destroyWindow(probe_title);
+            ::_exit(0);
+        } catch (...) {
+            ::_exit(1);
+        }
+    }
+
+    int status = 0;
+    while (::waitpid(child, &status, 0) < 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        error = std::string("cannot validate the display backend: ") +
+                std::strerror(errno);
+        return false;
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return true;
+    }
+    error = "--display cannot open a window with the current "
+            "DISPLAY/WAYLAND_DISPLAY; use --save-annotated for headless "
+            "single-image output";
+    return false;
 }
 
 struct Options {
@@ -1495,11 +1555,45 @@ int runCameraInference(const Options& options)
     edge_ai::BatchResult batch;
     edge_ai::PipelineStats stats;
     std::string fatal_error;
-    const bool run_ok = pipeline.run(batch, stats, callback, fatal_error);
     edge_ai::PreviewStats preview_stats;
+    bool run_ok = false;
     if (preview) {
+        // highgui/Qt window operations stay on the main thread. The pipeline
+        // runs in a worker; the main loop pumps the preview every ~15ms, so
+        // window events (including close) are handled even when no frames
+        // arrive during a camera outage.
+        std::atomic<bool> pipeline_done{false};
+        std::thread pipeline_thread;
+        try {
+            pipeline_thread = std::thread([&] {
+                try {
+                    run_ok =
+                        pipeline.run(batch, stats, callback, fatal_error);
+                } catch (const std::exception& exception) {
+                    fatal_error =
+                        std::string("camera pipeline exception: ") +
+                        exception.what();
+                } catch (...) {
+                    fatal_error = "camera pipeline exception: unknown";
+                }
+                pipeline_done.store(true);
+            });
+        } catch (const std::exception& exception) {
+            std::cerr << kProgram
+                      << ": failed to start camera pipeline thread: "
+                      << exception.what() << "\n";
+            preview->close();
+            return 1;
+        }
+        while (!pipeline_done.load()) {
+            preview->pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        }
+        pipeline_thread.join();
         preview->close();
         preview_stats = preview->stats();
+    } else {
+        run_ok = pipeline.run(batch, stats, callback, fatal_error);
     }
     if (!run_ok) {
         std::cerr << kProgram << ": camera pipeline failed: " << fatal_error
@@ -1578,12 +1672,12 @@ int main(int argc, char* argv[])
         std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
         return 0;
     }
-    if (options.display && !displayEnvironmentAvailable()) {
-        std::cerr << kProgram
-                  << ": --display requires DISPLAY/WAYLAND_DISPLAY or "
-                     "QT_QPA_PLATFORM=offscreen; use --save-annotated for "
-                     "headless single-image output\n";
-        return 1;
+    if (options.display) {
+        std::string display_error;
+        if (!validateDisplayBackend(display_error)) {
+            std::cerr << kProgram << ": " << display_error << "\n";
+            return 1;
+        }
     }
     // Only camera modes translate SIGINT into a graceful drain. Image modes
     // keep the default SIGINT disposition so Ctrl+C still terminates a batch

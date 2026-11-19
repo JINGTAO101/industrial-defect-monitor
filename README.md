@@ -164,11 +164,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 65 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 68 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
 重连/停止 + 标注/预览/无桌面保存）；提供 `EDGE_AI_MODEL_PATH`、
 `EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照、对照
-守卫和线程化批量对照测试，共 68 个。
+守卫和线程化批量对照测试，共 71 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -240,11 +240,14 @@ ctest --test-dir build --output-on-failure
 
 - `annotation_ng_boxes` / `annotation_error_frame`：非正方形原图坐标不缩放，
   ERROR 帧只画状态条不画框；
+- `annotation_label_avoids_banner` / `annotation_label_right_edge`：左上角标签
+  不压状态条，右侧标签不越出图像；
 - `annotation_save_png`：无 GUI 写 PNG 并回读尺寸/框像素；
 - `preview_drops_frames`：慢窗口只保留最新预览帧，submit 不阻塞；
 - `preview_close_stops` / `preview_error_stops`：关闭或显示失败置停止标志；
+- `preview_closed_without_frames`：首帧后断流，仍能通过窗口 poll 检测关闭；
 - `threaded_preview_image_included`：预览开启时结果携带源图；
-- `cli_annotation`：无桌面保存、尺寸检查、路径冲突和 headless `--display` 守卫。
+- `cli_annotation`：无桌面保存、尺寸检查、路径冲突、headless 和失效 DISPLAY 守卫。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
@@ -302,7 +305,9 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── visualization-run.txt          # 5C 无桌面保存、非正方形核对、vivid 预览日志
 │   ├── evidence/
 │   │   ├── synthetic-non-square.png   # 本地生成的 480×200 合成输入
-│   │   └── annotated-non-square.png   # 对应的 NG 标注结果
+│   │   ├── annotated-non-square.png   # 左上角标签避让 NG 状态条
+│   │   ├── synthetic-right-edge.png   # 右侧缺陷合成输入
+│   │   └── annotated-right-edge.png   # 右侧标签不越出图像
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -413,7 +418,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 68/68（含 5B/5C 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 71/71（含 5B/5C 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 
@@ -443,15 +448,20 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
 - 单图和摄像头共用 `annotateFrame()`：原图坐标画框、类别、置信度，并显示
   `OK`/`NG`/`ERROR`；ERROR 帧不画框、不产生质量判定；
 - 单图支持 `--save-annotated`（无桌面）和 `--display`（窗口）；
-- 摄像头 `--display` 使用独立预览线程，待显示缓存只有 1 帧；窗口慢时覆盖
-  旧预览帧并计数 `dropped`，检测结果仍逐帧输出；
-- 关闭窗口或按 Esc/Q 设置 5B 外部停止标志，读取停止后正常排空；
-- 无 `DISPLAY` 且未选择 offscreen 时，`--display` 在 highgui 前返回 1，避免
-  Qt abort；
+- 摄像头 `--display` 的 highgui 全在主线程执行；结果线程只做非阻塞
+  submit，待显示缓存只有 1 帧；窗口慢时覆盖旧预览帧并计数 `dropped`；
+- 主线程每约 15ms pump 一次，**无新帧时也处理窗口事件**；断流/重连期间
+  关窗或按 Esc 仍会设置 5B 外部停止标志并正常排空；
+- 无 `DISPLAY` 时 `--display` 返回 1；`DISPLAY` 已设置但连接失效时先在子
+  进程探测 highgui，失败返回可读错误而不是 Qt SIGABRT；
+- 状态条与类别标签先布局后绘制，标签避开状态条；靠右边缘的标签限制在
+  图像内；
 - 480×200 非正方形合成图实测：2 个检测框与 JSON 坐标逐边核对一致，保存图
-  仍为 480×200；vivid 预览 53 帧，`submitted=53 shown=47 dropped=6`，
-  `stopped=1` 退出码 0；
-- 5C 自动测试 8 个；完整套件 68/68，无外部资产 65 个。
+  仍为 480×200；左上角标签已避开 NG 状态条，右侧样例的标签不越界；
+- 上一轮 vivid 预览 53 帧，`submitted=53 shown=47 dropped=6`，`stopped=1`
+  退出码 0；本轮复验机无 `/dev/video*`，摄像头预览未重跑，断流关窗由
+  `preview_closed_without_frames` 单元测试覆盖；
+- 5C 自动测试 11 个；完整套件 71/71，无外部资产 68 个。
 
 ## 验收记录（2B/3）
 

@@ -114,4 +114,24 @@ if(NOT err MATCHES "requires DISPLAY")
         "headless --display did not explain the missing display: ${err}")
 endif()
 
+# A set-but-dead DISPLAY must be probed in a child; the detector must return
+# a readable error instead of letting Qt abort with SIGABRT (exit 134).
+execute_process(
+    COMMAND env -u WAYLAND_DISPLAY -u QT_QPA_PLATFORM DISPLAY=:9999
+        "${BIN}"
+        --model "${FIXTURES}/zero_output.onnx"
+        --image "${FIXTURES}/non_square_320x200.png"
+        --display
+    RESULT_VARIABLE rc
+    OUTPUT_VARIABLE out
+    ERROR_VARIABLE err)
+if(NOT rc EQUAL 1)
+    message(FATAL_ERROR
+        "dead DISPLAY: expected exit 1, got ${rc}; stdout=${out}; stderr=${err}")
+endif()
+if(NOT err MATCHES "cannot open a window")
+    message(FATAL_ERROR
+        "dead DISPLAY did not produce a readable error: ${err}")
+endif()
+
 message(STATUS "Headless annotation save and option guards passed")

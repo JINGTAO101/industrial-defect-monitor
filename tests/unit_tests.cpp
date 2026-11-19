@@ -1350,26 +1350,16 @@ bool testCameraBadFrameSequence(std::string& error)
                   "frame after bad frame did not use index 1", error);
 }
 
-bool waitForFlag(const std::atomic<bool>& flag, int timeout_ms)
-{
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(timeout_ms);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (flag.load()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    return flag.load();
-}
-
 class FakePreviewSink final : public edge_ai::PreviewSink {
 public:
     FakePreviewSink(int delay_ms,
-                    edge_ai::PreviewStatus status,
+                    edge_ai::PreviewStatus show_status,
+                    edge_ai::PreviewStatus poll_status =
+                        edge_ai::PreviewStatus::Ok,
                     std::string failure = "display failed")
         : delay_ms_(delay_ms),
-          status_(status),
+          show_status_(show_status),
+          poll_status_(poll_status),
           failure_(std::move(failure))
     {
     }
@@ -1381,20 +1371,31 @@ public:
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(delay_ms_));
         }
-        if (status_ == edge_ai::PreviewStatus::Error) {
+        if (show_status_ == edge_ai::PreviewStatus::Error) {
             error = failure_;
         }
-        return status_;
+        return show_status_;
+    }
+
+    edge_ai::PreviewStatus poll(std::string& error) override
+    {
+        ++polls_;
+        if (poll_status_ == edge_ai::PreviewStatus::Error) {
+            error = failure_;
+        }
+        return poll_status_;
     }
 
     void close() noexcept override { ++closes_; }
 
     std::atomic<int> calls_{0};
+    std::atomic<int> polls_{0};
     std::atomic<int> closes_{0};
 
 private:
     int delay_ms_ = 0;
-    edge_ai::PreviewStatus status_ = edge_ai::PreviewStatus::Ok;
+    edge_ai::PreviewStatus show_status_ = edge_ai::PreviewStatus::Ok;
+    edge_ai::PreviewStatus poll_status_ = edge_ai::PreviewStatus::Ok;
     std::string failure_;
 };
 
@@ -1438,6 +1439,51 @@ bool testAnnotationErrorFrame(std::string& error)
                   "error frame drew a detection box", error) &&
            expect(annotated.at<cv::Vec3b>(2, 2) == cv::Vec3b(0, 165, 255),
                   "error frame did not draw the ERROR banner", error);
+}
+
+bool testAnnotationLabelAvoidsBanner(std::string& error)
+{
+    edge_ai::AnnotationInput input;
+    input.quality_available = true;
+    input.is_ng = true;
+    input.detections.push_back({0, "pitted_surface", 0.62f, 0.0f, 0.0f,
+                                120.0f, 80.0f});
+    const edge_ai::AnnotationLayout layout = edge_ai::computeAnnotationLayout(
+        cv::Size(480, 200), input);
+    if (!expect(layout.labels.size() == 1,
+                "top-left layout did not produce one label", error)) {
+        return false;
+    }
+    const cv::Rect& label = layout.labels.front();
+    return expect((label & layout.status).area() == 0,
+                  "status banner overlaps the top-left detection label",
+                  error) &&
+           expect(label.x >= 0 && label.y >= 0 &&
+                      label.x + label.width <= 480 &&
+                      label.y + label.height <= 200,
+                  "top-left label is outside the image", error);
+}
+
+bool testAnnotationLabelRightEdge(std::string& error)
+{
+    edge_ai::AnnotationInput input;
+    input.quality_available = true;
+    input.is_ng = true;
+    input.detections.push_back({0, "rolled-in_scale", 0.55f, 250.0f, 80.0f,
+                                319.0f, 150.0f});
+    const edge_ai::AnnotationLayout layout = edge_ai::computeAnnotationLayout(
+        cv::Size(320, 200), input);
+    if (!expect(layout.labels.size() == 1,
+                "right-edge layout did not produce one label", error)) {
+        return false;
+    }
+    const cv::Rect& label = layout.labels.front();
+    return expect(label.x >= 0 && label.x + label.width <= 320,
+                  "right-edge label extends past the image boundary", error) &&
+           expect(label.y >= 0 && label.y + label.height <= 200,
+                  "right-edge label is outside the image", error) &&
+           expect((label & layout.status).area() == 0,
+                  "right-edge label overlaps the status banner", error);
 }
 
 bool testAnnotationSavePng(std::string& error)
@@ -1488,13 +1534,20 @@ bool testPreviewDropsFrames(std::string& error)
     for (int i = 0; i < 30; ++i) {
         preview.submit(frame.clone(), input);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    // Capacity one: the newest frame replaces the previous pending one.
+    const edge_ai::PreviewStats queued = preview.stats();
+    if (!expect(queued.submitted == 30,
+                "preview submitted count is wrong", error) ||
+        !expect(queued.dropped == 29,
+                "preview pending cache did not keep only the newest frame",
+                error)) {
+        return false;
+    }
+    preview.pump();  // shows the newest pending frame
     preview.close();
     const edge_ai::PreviewStats stats = preview.stats();
-    if (!expect(stats.submitted == 30,
-                "preview submitted count is wrong", error) ||
-        !expect(stats.dropped > 0,
-                "slow preview did not drop any pending frame", error) ||
+    if (!expect(stats.shown == 1,
+                "preview did not show the newest pending frame", error) ||
         !expect(stats.shown < stats.submitted,
                 "slow preview showed every submitted frame", error) ||
         !expect(sink_ptr->closes_ == 1,
@@ -1517,14 +1570,48 @@ bool testPreviewCloseStops(std::string& error)
     }
     preview.submit(cv::Mat(32, 32, CV_8UC3, cv::Scalar(0, 0, 0)),
                    edge_ai::AnnotationInput{});
-    const bool stopped = waitForFlag(stop, 1000);
+    preview.pump();
     preview.close();
     const edge_ai::PreviewStats stats = preview.stats();
-    return expect(stopped, "closing the preview did not set external stop",
-                  error) &&
+    return expect(stop.load(),
+                  "closing the preview did not set external stop", error) &&
            expect(stats.closed_by_user,
                   "preview close was not recorded as a user close", error) &&
            expect(!stats.failed, "user close was recorded as a failure",
+                  error);
+}
+
+bool testPreviewClosedWithoutFrames(std::string& error)
+{
+    std::atomic<bool> stop{false};
+    auto sink = std::make_unique<FakePreviewSink>(
+        0, edge_ai::PreviewStatus::Ok, edge_ai::PreviewStatus::Closed);
+    FakePreviewSink* sink_ptr = sink.get();
+    edge_ai::PreviewWindow preview("test", &stop, std::move(sink));
+    std::string start_error;
+    if (!expect(preview.start(start_error),
+                "no-frame preview failed to start: " + start_error, error)) {
+        return false;
+    }
+    preview.submit(cv::Mat(32, 32, CV_8UC3, cv::Scalar(0, 0, 0)),
+                   edge_ai::AnnotationInput{});
+    preview.pump();  // first frame shown
+    if (!expect(preview.stats().shown == 1,
+                "first preview frame was not shown", error) ||
+        !expect(!stop.load(), "preview stopped before the window was closed",
+                error)) {
+        return false;
+    }
+    // No further frames: pump must still poll the window and observe close.
+    preview.pump();
+    preview.close();
+    const edge_ai::PreviewStats stats = preview.stats();
+    return expect(stop.load(),
+                  "close without new frames did not set external stop", error) &&
+           expect(stats.closed_by_user,
+                  "close without new frames was not recorded", error) &&
+           expect(sink_ptr->polls_ >= 1,
+                  "preview did not poll the window when no frame arrived",
                   error);
 }
 
@@ -1532,7 +1619,8 @@ bool testPreviewErrorStops(std::string& error)
 {
     std::atomic<bool> stop{false};
     auto sink = std::make_unique<FakePreviewSink>(
-        0, edge_ai::PreviewStatus::Error, "injected display failure");
+        0, edge_ai::PreviewStatus::Error, edge_ai::PreviewStatus::Ok,
+        "injected display failure");
     edge_ai::PreviewWindow preview("test", &stop, std::move(sink));
     std::string start_error;
     if (!expect(preview.start(start_error),
@@ -1541,10 +1629,11 @@ bool testPreviewErrorStops(std::string& error)
     }
     preview.submit(cv::Mat(32, 32, CV_8UC3, cv::Scalar(0, 0, 0)),
                    edge_ai::AnnotationInput{});
-    const bool stopped = waitForFlag(stop, 1000);
+    preview.pump();
     preview.close();
     const edge_ai::PreviewStats stats = preview.stats();
-    return expect(stopped, "preview failure did not set external stop", error) &&
+    return expect(stop.load(),
+                  "preview failure did not set external stop", error) &&
            expect(stats.failed, "preview failure was not recorded", error) &&
            expect(stats.failure.find("injected") != std::string::npos,
                   "preview failure lacks the sink diagnostic", error);
@@ -1774,9 +1863,12 @@ int main(int argc, char* argv[])
         {"camera_bad_frame_sequence", testCameraBadFrameSequence},
         {"annotation_ng_boxes", testAnnotationNgBoxes},
         {"annotation_error_frame", testAnnotationErrorFrame},
+        {"annotation_label_avoids_banner", testAnnotationLabelAvoidsBanner},
+        {"annotation_label_right_edge", testAnnotationLabelRightEdge},
         {"annotation_save_png", testAnnotationSavePng},
         {"preview_drops_frames", testPreviewDropsFrames},
         {"preview_close_stops", testPreviewCloseStops},
+        {"preview_closed_without_frames", testPreviewClosedWithoutFrames},
         {"preview_error_stops", testPreviewErrorStops},
     };
 
