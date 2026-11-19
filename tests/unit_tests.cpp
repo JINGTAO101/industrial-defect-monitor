@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -728,12 +729,58 @@ bool testCameraReadDeadline(std::string& error)
             return false;
         }
     }
+    // A single VIDIOC_DQBUF must not self-retry EINTR: when it keeps
+    // interrupting, the shared deadline must expire and report timeout, never
+    // deliver a frame after the budget is exhausted. Use the same one-shot
+    // production helper with an injected ioctl that returns EINTR.
+    {
+        edge_ai::CameraReadOps operations;
+        operations.poll = [](int, int&) { return 1; };
+        int dequeue_calls = 0;
+        v4l2_buffer buffer{};
+        operations.dequeue = [&dequeue_calls, &buffer](int& error_number) {
+            errno = 0;
+            const int result = edge_ai::dequeueCameraBufferOnce(
+                -1, VIDIOC_DQBUF, &buffer,
+                [&dequeue_calls](int, unsigned long, void*) {
+                    ++dequeue_calls;
+                    errno = EINTR;
+                    return -1;
+                });
+            error_number = errno;
+            return result;
+        };
+        std::string read_error;
+        const auto start = std::chrono::steady_clock::now();
+        const edge_ai::CameraReadResult result =
+            edge_ai::waitForCameraFrame(operations, 100, read_error);
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start)
+                .count();
+        if (!expect(result == edge_ai::CameraReadResult::Timeout,
+                    "continuous DQBUF EINTR did not time out: " + read_error,
+                    error) ||
+            !expect(read_error.find("timeout") != std::string::npos,
+                    "continuous DQBUF EINTR timeout is not diagnostic: " +
+                        read_error,
+                    error) ||
+            !expect(elapsed < 500,
+                    "continuous DQBUF EINTR ran far past its 100ms deadline",
+                    error) ||
+            !expect(dequeue_calls > 1,
+                    "continuous DQBUF EINTR was not retried by the deadline loop",
+                    error)) {
+            return false;
+        }
+    }
+
     edge_ai::CameraReadOps operations;
     int dequeue_calls = 0;
     operations.poll = [](int, int&) { return 1; };
     operations.dequeue = [&dequeue_calls](int& error_number) {
         if (++dequeue_calls == 1) {
-            error_number = EAGAIN;
+            error_number = EINTR;
             return -1;
         }
         return 0;
@@ -741,7 +788,8 @@ bool testCameraReadDeadline(std::string& error)
     std::string read_error;
     return expect(edge_ai::waitForCameraFrame(operations, 50, read_error) ==
                       edge_ai::CameraReadResult::FrameReady,
-                  "dequeue EAGAIN was not retried: " + read_error, error);
+                  "dequeue EINTR was not retried within budget: " + read_error,
+                  error);
 }
 
 bool testCameraColorimetry(std::string& error)

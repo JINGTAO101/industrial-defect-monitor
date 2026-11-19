@@ -4,7 +4,7 @@
 # No USB camera passthrough; vivid virtual device used for implementation tests.
 # AT-009 real-camera acceptance remains pending.
 
-$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$ORT_DIR" -DEDGE_AI_MODEL_PATH="$MODEL_DIR/neu_det_yolov8n_best.onnx" -DEDGE_AI_TEST_IMAGES_DIR="$MODEL_DIR/test-images" -DEDGE_AI_PYTHON="$MODEL_DIR/venv/bin/python"
+$ cmake ...; $ cmake --build build; $ ctest --test-dir build --output-on-failure
 -- The CXX compiler identification is GNU 13.3.0
 -- Detecting CXX compiler ABI info
 -- Detecting CXX compiler ABI info - done
@@ -19,187 +19,189 @@ $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$O
 -- ONNX Runtime headers: /home/ljt/edge-ai-models/onnxruntime-1.32.0/onnxruntime-linux-x64-1.32.0/include
 -- ONNX Runtime library: /home/ljt/edge-ai-models/onnxruntime-1.32.0/onnxruntime-linux-x64-1.32.0/lib/libonnxruntime.so
 -- OpenCV: 4.6.0
--- Configuring done (0.9s)
+-- Configuring done (0.8s)
 -- Generating done (0.0s)
 -- Build files have been written to: /home/ljt/industrial-defect-monitor/build
-
-$ cmake --build build
 [1/24] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
 [2/24] Linking CXX static library libsystem_info.a
-[3/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
-[4/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/quality.cpp.o
-[5/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
+[3/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/quality.cpp.o
+[4/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
+[5/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
 [6/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
-[7/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_source.cpp.o
-[8/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
-[9/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/batch_processor.cpp.o
-[10/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/camera_source.cpp.o
-[11/24] Linking CXX static library libedge_ai_core.a
+[7/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
+[8/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_source.cpp.o
+[9/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/camera_source.cpp.o
+[10/24] Linking CXX static library libedge_ai_core.a
+[11/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/batch_processor.cpp.o
 [12/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
-[13/24] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
-[14/24] Building CXX object CMakeFiles/edge_ai_batch_tests.dir/tests/batch_processor_tests.cpp.o
-[15/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/threaded_pipeline.cpp.o
-[16/24] Linking CXX static library libedge_ai_inference.a
+[13/24] Building CXX object CMakeFiles/edge_ai_batch_tests.dir/tests/batch_processor_tests.cpp.o
+[14/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/threaded_pipeline.cpp.o
+[15/24] Linking CXX static library libedge_ai_inference.a
+[16/24] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
 [17/24] Linking CXX executable bin/edge_ai_batch_tests
 [18/24] Linking CXX executable bin/edge_ai
-[19/24] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
-[20/24] Linking CXX executable bin/edge_ai_tests
-[21/24] Building CXX object CMakeFiles/edge_ai_threaded_tests.dir/tests/threaded_pipeline_tests.cpp.o
-[22/24] Linking CXX executable bin/edge_ai_threaded_tests
+[19/24] Building CXX object CMakeFiles/edge_ai_threaded_tests.dir/tests/threaded_pipeline_tests.cpp.o
+[20/24] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
+[21/24] Linking CXX executable bin/edge_ai_threaded_tests
+[22/24] Linking CXX executable bin/edge_ai_tests
 [23/24] Building CXX object CMakeFiles/edge_ai_queue_tests.dir/tests/queue_tests.cpp.o
 [24/24] Linking CXX executable bin/edge_ai_queue_tests
-
-$ ctest --test-dir build --output-on-failure
 Internal ctest changing into directory: /home/ljt/industrial-defect-monitor/build
 Test project /home/ljt/industrial-defect-monitor/build
       Start  1: batch_source_exception
- 1/49 Test  #1: batch_source_exception ....................   Passed    0.22 sec
+ 1/49 Test  #1: batch_source_exception ....................   Passed    0.90 sec
       Start  2: threaded_normal_drain
- 2/49 Test  #2: threaded_normal_drain .....................   Passed    0.15 sec
+ 2/49 Test  #2: threaded_normal_drain .....................   Passed    0.29 sec
       Start  3: threaded_full_backpressure
- 3/49 Test  #3: threaded_full_backpressure ................   Passed    0.19 sec
+ 3/49 Test  #3: threaded_full_backpressure ................   Passed    0.24 sec
       Start  4: threaded_fatal_wakes
- 4/49 Test  #4: threaded_fatal_wakes ......................   Passed    0.13 sec
+ 4/49 Test  #4: threaded_fatal_wakes ......................   Passed    0.22 sec
       Start  5: threaded_start_failure_inference
- 5/49 Test  #5: threaded_start_failure_inference ..........   Passed    0.06 sec
+ 5/49 Test  #5: threaded_start_failure_inference ..........   Passed    0.08 sec
       Start  6: threaded_start_failure_result
- 6/49 Test  #6: threaded_start_failure_result .............   Passed    0.06 sec
+ 6/49 Test  #6: threaded_start_failure_result .............   Passed    0.14 sec
       Start  7: threaded_wait_gate_stale_flag
- 7/49 Test  #7: threaded_wait_gate_stale_flag .............   Passed    0.05 sec
+ 7/49 Test  #7: threaded_wait_gate_stale_flag .............   Passed    0.02 sec
       Start  8: queue_reject_zero_capacity
- 8/49 Test  #8: queue_reject_zero_capacity ................   Passed    0.01 sec
+ 8/49 Test  #8: queue_reject_zero_capacity ................   Passed    0.04 sec
       Start  9: queue_full_blocks
  9/49 Test  #9: queue_full_blocks .........................   Passed    0.11 sec
       Start 10: queue_empty_blocks
-10/49 Test #10: queue_empty_blocks ........................   Passed    0.01 sec
+10/49 Test #10: queue_empty_blocks ........................   Passed    0.04 sec
       Start 11: queue_close_drains
-11/49 Test #11: queue_close_drains ........................   Passed    0.00 sec
+11/49 Test #11: queue_close_drains ........................   Passed    0.01 sec
       Start 12: queue_close_wakes_waiters
 12/49 Test #12: queue_close_wakes_waiters .................   Passed    0.01 sec
       Start 13: queue_concurrent_no_loss
-13/49 Test #13: queue_concurrent_no_loss ..................   Passed    1.37 sec
+13/49 Test #13: queue_concurrent_no_loss ..................   Passed    1.42 sec
       Start 14: unit_preprocess_non_square
-14/49 Test #14: unit_preprocess_non_square ................   Passed    0.11 sec
+14/49 Test #14: unit_preprocess_non_square ................   Passed    0.15 sec
       Start 15: unit_postprocess_empty
-15/49 Test #15: unit_postprocess_empty ....................   Passed    0.07 sec
+15/49 Test #15: unit_postprocess_empty ....................   Passed    0.08 sec
       Start 16: unit_postprocess_nms_same_class
-16/49 Test #16: unit_postprocess_nms_same_class ...........   Passed    0.07 sec
+16/49 Test #16: unit_postprocess_nms_same_class ...........   Passed    0.11 sec
       Start 17: unit_postprocess_nms_cross_class
 17/49 Test #17: unit_postprocess_nms_cross_class ..........   Passed    0.07 sec
       Start 18: unit_postprocess_coordinate_restore
-18/49 Test #18: unit_postprocess_coordinate_restore .......   Passed    0.07 sec
+18/49 Test #18: unit_postprocess_coordinate_restore .......   Passed    0.11 sec
       Start 19: unit_postprocess_nonfinite
-19/49 Test #19: unit_postprocess_nonfinite ................   Passed    0.07 sec
+19/49 Test #19: unit_postprocess_nonfinite ................   Passed    0.08 sec
       Start 20: unit_postprocess_score_range
-20/49 Test #20: unit_postprocess_score_range ..............   Passed    0.07 sec
+20/49 Test #20: unit_postprocess_score_range ..............   Passed    0.08 sec
       Start 21: unit_postprocess_shape_mismatch
-21/49 Test #21: unit_postprocess_shape_mismatch ...........   Passed    0.10 sec
+21/49 Test #21: unit_postprocess_shape_mismatch ...........   Passed    0.08 sec
       Start 22: unit_class_mapping_unknown
-22/49 Test #22: unit_class_mapping_unknown ................   Passed    0.10 sec
+22/49 Test #22: unit_class_mapping_unknown ................   Passed    0.08 sec
       Start 23: unit_contract_validation
 23/49 Test #23: unit_contract_validation ..................   Passed    0.07 sec
       Start 24: unit_class_metadata_parser
-24/49 Test #24: unit_class_metadata_parser ................   Passed    0.06 sec
+24/49 Test #24: unit_class_metadata_parser ................   Passed    0.11 sec
       Start 25: unit_quality_no_defects
-25/49 Test #25: unit_quality_no_defects ...................   Passed    0.15 sec
+25/49 Test #25: unit_quality_no_defects ...................   Passed    0.07 sec
       Start 26: unit_quality_single_defect
-26/49 Test #26: unit_quality_single_defect ................   Passed    0.07 sec
+26/49 Test #26: unit_quality_single_defect ................   Passed    0.08 sec
       Start 27: unit_quality_below_threshold
-27/49 Test #27: unit_quality_below_threshold ..............   Passed    0.07 sec
+27/49 Test #27: unit_quality_below_threshold ..............   Passed    0.08 sec
       Start 28: unit_quality_multiple_defects
 28/49 Test #28: unit_quality_multiple_defects .............   Passed    0.07 sec
       Start 29: unit_quality_boundary
-29/49 Test #29: unit_quality_boundary .....................   Passed    0.07 sec
+29/49 Test #29: unit_quality_boundary .....................   Passed    0.08 sec
       Start 30: unit_quality_invalid_threshold
-30/49 Test #30: unit_quality_invalid_threshold ............   Passed    0.07 sec
+30/49 Test #30: unit_quality_invalid_threshold ............   Passed    0.14 sec
       Start 31: unit_image_source_single
-31/49 Test #31: unit_image_source_single ..................   Passed    0.07 sec
+31/49 Test #31: unit_image_source_single ..................   Passed    0.13 sec
       Start 32: unit_image_source_directory
-32/49 Test #32: unit_image_source_directory ...............   Passed    0.08 sec
+32/49 Test #32: unit_image_source_directory ...............   Passed    0.11 sec
       Start 33: unit_camera_missing_device
 33/49 Test #33: unit_camera_missing_device ................   Passed    0.07 sec
       Start 34: unit_camera_timeout
-34/49 Test #34: unit_camera_timeout .......................   Passed    0.06 sec
+34/49 Test #34: unit_camera_timeout .......................   Passed    0.08 sec
       Start 35: unit_camera_invalid_options
-35/49 Test #35: unit_camera_invalid_options ...............   Passed    0.07 sec
+35/49 Test #35: unit_camera_invalid_options ...............   Passed    0.08 sec
       Start 36: unit_camera_frame_conversion
-36/49 Test #36: unit_camera_frame_conversion ..............   Passed    0.07 sec
+36/49 Test #36: unit_camera_frame_conversion ..............   Passed    0.12 sec
       Start 37: unit_camera_buffer_validation
-37/49 Test #37: unit_camera_buffer_validation .............   Passed    0.07 sec
+37/49 Test #37: unit_camera_buffer_validation .............   Passed    0.08 sec
       Start 38: unit_camera_busy_error
-38/49 Test #38: unit_camera_busy_error ....................   Passed    0.07 sec
+38/49 Test #38: unit_camera_busy_error ....................   Passed    0.11 sec
       Start 39: unit_camera_read_deadline
-39/49 Test #39: unit_camera_read_deadline .................   Passed    0.18 sec
+39/49 Test #39: unit_camera_read_deadline .................   Passed    0.31 sec
       Start 40: unit_camera_colorimetry
-40/49 Test #40: unit_camera_colorimetry ...................   Passed    0.07 sec
+40/49 Test #40: unit_camera_colorimetry ...................   Passed    0.11 sec
       Start 41: cli_behavior
-41/49 Test #41: cli_behavior ..............................   Passed    2.79 sec
+41/49 Test #41: cli_behavior ..............................   Passed    3.05 sec
       Start 42: cli_inference_failures
-42/49 Test #42: cli_inference_failures ....................   Passed    0.83 sec
+42/49 Test #42: cli_inference_failures ....................   Passed    1.11 sec
       Start 43: cli_empty_detections
-43/49 Test #43: cli_empty_detections ......................   Passed    0.21 sec
+43/49 Test #43: cli_empty_detections ......................   Passed    0.24 sec
       Start 44: cli_path_conflicts
-44/49 Test #44: cli_path_conflicts ........................   Passed    1.10 sec
+44/49 Test #44: cli_path_conflicts ........................   Passed    1.31 sec
       Start 45: cli_batch
-45/49 Test #45: cli_batch .................................   Passed    1.61 sec
+45/49 Test #45: cli_batch .................................   Passed    1.86 sec
       Start 46: cli_camera
-46/49 Test #46: cli_camera ................................   Passed    0.62 sec
+46/49 Test #46: cli_camera ................................   Passed    0.78 sec
       Start 47: cpp_reference_comparison
-47/49 Test #47: cpp_reference_comparison ..................   Passed    2.54 sec
+47/49 Test #47: cpp_reference_comparison ..................   Passed    3.92 sec
       Start 48: cpp_reference_rejects_incomplete_inputs
-48/49 Test #48: cpp_reference_rejects_incomplete_inputs ...   Passed    0.44 sec
+48/49 Test #48: cpp_reference_rejects_incomplete_inputs ...   Passed    0.50 sec
       Start 49: threaded_batch_reference
 49/49 Test #49: threaded_batch_reference ..................   Passed    0.91 sec
 
 100% tests passed, 0 tests failed out of 49
 
-Total Test time (real) =  15.61 sec
+Total Test time (real) =  20.02 sec
 
 $ ctest --test-dir build -R camera --output-on-failure
 Internal ctest changing into directory: /home/ljt/industrial-defect-monitor/build
 Test project /home/ljt/industrial-defect-monitor/build
     Start 33: unit_camera_missing_device
-1/9 Test #33: unit_camera_missing_device .......   Passed    0.07 sec
+1/9 Test #33: unit_camera_missing_device .......   Passed    0.08 sec
     Start 34: unit_camera_timeout
-2/9 Test #34: unit_camera_timeout ..............   Passed    0.07 sec
+2/9 Test #34: unit_camera_timeout ..............   Passed    0.08 sec
     Start 35: unit_camera_invalid_options
-3/9 Test #35: unit_camera_invalid_options ......   Passed    0.07 sec
+3/9 Test #35: unit_camera_invalid_options ......   Passed    0.09 sec
     Start 36: unit_camera_frame_conversion
-4/9 Test #36: unit_camera_frame_conversion .....   Passed    0.07 sec
+4/9 Test #36: unit_camera_frame_conversion .....   Passed    0.08 sec
     Start 37: unit_camera_buffer_validation
-5/9 Test #37: unit_camera_buffer_validation ....   Passed    0.07 sec
+5/9 Test #37: unit_camera_buffer_validation ....   Passed    0.12 sec
     Start 38: unit_camera_busy_error
-6/9 Test #38: unit_camera_busy_error ...........   Passed    0.07 sec
+6/9 Test #38: unit_camera_busy_error ...........   Passed    0.11 sec
     Start 39: unit_camera_read_deadline
-7/9 Test #39: unit_camera_read_deadline ........   Passed    0.17 sec
+7/9 Test #39: unit_camera_read_deadline ........   Passed    0.29 sec
     Start 40: unit_camera_colorimetry
-8/9 Test #40: unit_camera_colorimetry ..........   Passed    0.07 sec
+8/9 Test #40: unit_camera_colorimetry ..........   Passed    0.09 sec
     Start 46: cli_camera
-9/9 Test #46: cli_camera .......................   Passed    0.66 sec
+9/9 Test #46: cli_camera .......................   Passed    0.76 sec
 
 100% tests passed, 0 tests failed out of 9
 
-Total Test time (real) =   1.34 sec
+Total Test time (real) =   1.72 sec
 
-$ v4l2-ctl -d /dev/video0 --set-fmt-video=width=640,height=480,pixelformat=YUYV --set-parm=30
+$ ./build/bin/edge_ai_tests camera_read_deadline
+[PASS] camera_read_deadline
+1 test(s), 0 failure(s)
+
+$ v4l2-ctl ... --set-ctrl inject_v4l2_buf_flag_error=1
 Frame rate set to 30.000 fps
 
-$ edge_ai --camera /dev/video0 --capture-only --max-frames 1   # after inject_v4l2_buf_flag_error=1
+$ edge_ai ... --max-frames 1
 camera: /dev/video0
 requested: YUYV 640x480 @ 30 fps timeout=2000 ms
 actual: YUYV 640x480 @ 30.000 fps bytes_per_line=1280 colorspace=sRGB ycbcr=default quantization=default
 edge_ai: camera capture failed: camera frame marked with V4L2_BUF_FLAG_ERROR
 # exit code: 1
 
-$ edge_ai --camera /dev/video0 --capture-only --max-frames 2   # after bad frame, buffer requeued
+$ edge_ai ... --max-frames 2
 camera: /dev/video0
 requested: YUYV 640x480 @ 30 fps timeout=2000 ms
 actual: YUYV 640x480 @ 30.000 fps bytes_per_line=1280 colorspace=sRGB ycbcr=default quantization=default
-frame 0: 640x480 channels=3 timestamp_ms=1795064212138
-frame 1: 640x480 channels=3 timestamp_ms=1795064212169
+frame 0: 640x480 channels=3 timestamp_ms=1795079133597
+frame 1: 640x480 channels=3 timestamp_ms=1795079133628
 camera capture complete: device=/dev/video0 format=YUYV size=640x480 fps=30.000 frames=2 index_range=0..1
 # exit code: 0
 
-$ edge_ai --camera /dev/video0 --capture-only --max-frames 1   # while another process streams
+$ edge_ai ... --max-frames 1 (device busy)
 edge_ai: camera device busy: /dev/video0: Device or resource busy
 # exit code: 1
+
+# 30-frame capture: see docs/v4l2-capture-run.txt

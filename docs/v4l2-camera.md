@@ -68,8 +68,9 @@ actual: YUYV 640x480 @ 30.000 fps bytes_per_line=1280
 - 出队缓冲区带 `V4L2_BUF_FLAG_ERROR`、空帧、超长帧或非法索引时拒绝该帧；
   只要索引有效，即使帧损坏/长度非法也会先 `VIDIOC_QBUF` 归还缓冲区。
 - 整个读取使用同一个 `steady_clock` 截止时间：`poll` 的 EINTR 和 `DQBUF` 的
-  EAGAIN 都按剩余时间重试，不会重新获得完整超时，也不会在 EAGAIN 时立即
-  误报超时。
+  EAGAIN/EINTR 都按剩余时间重试，不会重新获得完整超时，也不会在 EAGAIN 时
+  立即误报超时。`VIDIOC_DQBUF` 只执行**一次原始 ioctl**，不内部重试
+  EINTR，否则外层的截止时间循环看不到中断、无法按时退出。
 - YUYV 只接受 BT.601/default 编码 + limited/default 量化（OpenCV
   `COLOR_YUV2BGR_YUYV` 的固定转换）；其他 colorspace/encoding/quantization
   明确拒绝。实测 vivid 为 `colorspace=sRGB ycbcr=default quantization=default`。
@@ -154,7 +155,7 @@ ctest --test-dir build --output-on-failure
 | `unit_camera_frame_conversion` | 注入 2×2 YUYV 帧，验证 BGR、序号、时间戳 |
 | `unit_camera_buffer_validation` | 坏帧标志、空帧、超长帧、非法索引被拒绝 |
 | `unit_camera_busy_error` | EBUSY 归类为 device busy，EACCES 归类为权限问题 |
-| `unit_camera_read_deadline` | poll EINTR 与 DQBUF EAGAIN 共用同一截止时间 |
+| `unit_camera_read_deadline` | poll EINTR、DQBUF EAGAIN 与连续 DQBUF EINTR 共用同一截止时间 |
 | `unit_camera_colorimetry` | 仅 BT.601/limited（含 default）可用，其他被拒绝 |
 | `cli_camera` | 无设备、缺少 `--capture-only`/`--camera`、非法帧数/格式/尺寸、错误组合 |
 

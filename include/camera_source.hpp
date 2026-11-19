@@ -75,6 +75,15 @@ CameraReadResult waitForCameraFrame(
     int timeout_ms,
     std::string& error);
 
+// Performs exactly one VIDIOC_DQBUF syscall through ioctl_fn. Production and
+// regression tests use this same one-shot helper; retry decisions belong to
+// waitForCameraFrame()'s deadline loop.
+int dequeueCameraBufferOnce(
+    int fd,
+    unsigned long request,
+    void* buffer,
+    const std::function<int(int, unsigned long, void*)>& ioctl_fn);
+
 std::string normalizeCameraFormat(const std::string& format);
 bool isSupportedCameraFormat(const std::string& format);
 

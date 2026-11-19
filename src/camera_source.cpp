@@ -403,7 +403,14 @@ public:
             buffer = v4l2_buffer{};
             buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             buffer.memory = V4L2_MEMORY_MMAP;
-            const int result = xioctl(VIDIOC_DQBUF, &buffer);
+            // Single raw ioctl only: EINTR/EAGAIN must bubble up so the
+            // shared deadline in waitForCameraFrame() decides whether to
+            // retry. xioctl()'s internal retry would bypass the deadline.
+            const int result = dequeueCameraBufferOnce(
+                fd_, VIDIOC_DQBUF, &buffer,
+                [](int fd, unsigned long request, void* argument) {
+                    return ioctl(fd, request, argument);
+                });
             error_number = errno;
             return result;
         };
@@ -560,6 +567,19 @@ bool validateCameraBuffer(
         return false;
     }
     return true;
+}
+
+int dequeueCameraBufferOnce(
+    int fd,
+    unsigned long request,
+    void* buffer,
+    const std::function<int(int, unsigned long, void*)>& ioctl_fn)
+{
+    if (!ioctl_fn) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ioctl_fn(fd, request, buffer);
 }
 
 CameraReadResult waitForCameraFrame(

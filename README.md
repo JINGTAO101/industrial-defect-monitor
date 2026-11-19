@@ -195,7 +195,7 @@ ctest --test-dir build --output-on-failure
 - `camera_frame_conversion`：2×2 YUYV 注入帧转 BGR、序号和时间戳；
 - `camera_buffer_validation`：`V4L2_BUF_FLAG_ERROR`、空帧、超长帧、非法索引；
 - `camera_busy_error`：初始化 EBUSY 统一归类为 device busy；
-- `camera_read_deadline`：poll EINTR / DQBUF EAGAIN 共用截止时间；
+- `camera_read_deadline`：poll EINTR / DQBUF EAGAIN / 连续 DQBUF EINTR 共用截止时间；
 - `camera_colorimetry`：仅接受 BT.601/limited（含 default 映射），拒绝其他；
 - `cli_camera`：无设备、缺少参数/非法帧数/格式/尺寸及错误组合。
 
