@@ -45,11 +45,47 @@ expect_camera_error(
 )
 
 expect_camera_error(
-    "camera without capture-only"
+    "camera without model or capture-only"
     2
-    "requires --capture-only"
+    "requires --model or --capture-only"
     --camera "/dev/video0"
     --max-frames 1
+)
+
+expect_camera_error(
+    "missing camera for inference"
+    1
+    "camera device not found"
+    --camera "/dev/edge_ai_missing_camera"
+    --model "/tmp/does-not-matter.onnx"
+    --max-frames 1
+)
+
+expect_camera_error(
+    "reconnect options with capture-only"
+    2
+    "require camera inference"
+    --camera "/dev/video0"
+    --capture-only
+    --camera-reconnect-attempts 2
+)
+
+expect_camera_error(
+    "camera inference with image"
+    2
+    "cannot be combined with --image"
+    --camera "/dev/video0"
+    --model "/tmp/model.onnx"
+    --image "/tmp/image.jpg"
+)
+
+expect_camera_error(
+    "camera inference queue capacity zero"
+    2
+    "greater than 0"
+    --camera "/dev/video0"
+    --model "/tmp/model.onnx"
+    --queue-capacity 0
 )
 
 expect_camera_error(

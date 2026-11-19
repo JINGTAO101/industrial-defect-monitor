@@ -7,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -816,6 +817,223 @@ bool testCameraColorimetry(std::string& error)
                   "JPEG colorspace YUYV was accepted", error);
 }
 
+class ScriptedCameraBackend final : public edge_ai::CameraBackend {
+public:
+    enum class Event { Frame, Bad, Lost };
+
+    explicit ScriptedCameraBackend(std::vector<Event> events)
+        : events_(std::move(events))
+    {
+        info_.device = "/dev/scripted";
+        info_.actual_format = "YUYV";
+        info_.actual_width = 2;
+        info_.actual_height = 2;
+        info_.actual_fps = 30.0;
+        info_.bytes_per_line = 4;
+    }
+
+    bool nextFrame(std::vector<std::uint8_t>& payload,
+                   std::string& error) override
+    {
+        error_kind_ = edge_ai::CameraErrorKind::None;
+        if (index_ >= events_.size()) {
+            error = "scripted camera ended";
+            error_kind_ = edge_ai::CameraErrorKind::DeviceLost;
+            return false;
+        }
+        const Event event = events_[index_++];
+        if (event == Event::Frame) {
+            payload = {0, 128, 255, 128, 0, 128, 255, 128};
+            return true;
+        }
+        if (event == Event::Bad) {
+            error = "camera frame marked with V4L2_BUF_FLAG_ERROR";
+            error_kind_ = edge_ai::CameraErrorKind::BadFrame;
+        } else {
+            error = "camera device disconnected";
+            error_kind_ = edge_ai::CameraErrorKind::DeviceLost;
+        }
+        return false;
+    }
+
+    const edge_ai::CameraInfo& info() const override { return info_; }
+    edge_ai::CameraErrorKind lastErrorKind() const override
+    {
+        return error_kind_;
+    }
+    void close() noexcept override {}
+
+private:
+    std::vector<Event> events_;
+    std::size_t index_ = 0;
+    edge_ai::CameraInfo info_;
+    edge_ai::CameraErrorKind error_kind_ = edge_ai::CameraErrorKind::None;
+};
+
+edge_ai::CameraOptions reconnectCameraOptions()
+{
+    edge_ai::CameraOptions options;
+    options.device = "/dev/scripted";
+    options.format = "YUYV";
+    options.width = 2;
+    options.height = 2;
+    options.fps = 30;
+    options.timeout_ms = 100;
+    return options;
+}
+
+bool testCameraReconnectSuccess(std::string& error)
+{
+    using Event = ScriptedCameraBackend::Event;
+    std::vector<std::vector<Event>> scripts = {
+        {Event::Frame, Event::Lost}, {Event::Frame}};
+    int factory_calls = 0;
+    const edge_ai::CameraFactory factory =
+        [&](const edge_ai::CameraOptions& options,
+            std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        if (factory_calls >= static_cast<int>(scripts.size())) {
+            open_error = "no more simulated devices";
+            return nullptr;
+        }
+        auto backend = std::make_unique<ScriptedCameraBackend>(
+            scripts[static_cast<std::size_t>(factory_calls++)]);
+        return std::make_unique<edge_ai::CameraSource>(
+            options, std::move(backend), open_error);
+    };
+    std::string source_error;
+    edge_ai::ReconnectingCameraSource source(
+        reconnectCameraOptions(), 2, 0, nullptr, factory, source_error);
+    if (!expect(source_error.empty(),
+                "reconnect source construction failed: " + source_error,
+                error)) {
+        return false;
+    }
+
+    edge_ai::Frame first;
+    edge_ai::Frame second;
+    return expect(source.next(first, source_error) ==
+                      edge_ai::SourceStatus::Frame &&
+                      first.index == 0,
+                  "first pre-reconnect frame failed", error) &&
+           expect(source.next(second, source_error) ==
+                      edge_ai::SourceStatus::Frame &&
+                      second.index == 1,
+                  "frame after reconnect failed: " + source_error, error) &&
+           expect(source.reconnectCount() == 1,
+                  "reconnect count is not 1", error);
+}
+
+bool testCameraReconnectExhausted(std::string& error)
+{
+    using Event = ScriptedCameraBackend::Event;
+    int factory_calls = 0;
+    const edge_ai::CameraFactory factory =
+        [&](const edge_ai::CameraOptions& options,
+            std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        ++factory_calls;
+        if (factory_calls == 1) {
+            auto backend = std::make_unique<ScriptedCameraBackend>(
+                std::vector<Event>{Event::Lost});
+            return std::make_unique<edge_ai::CameraSource>(
+                options, std::move(backend), open_error);
+        }
+        open_error = "simulated reopen failure";
+        return nullptr;
+    };
+    std::string source_error;
+    edge_ai::ReconnectingCameraSource source(
+        reconnectCameraOptions(), 2, 0, nullptr, factory, source_error);
+    edge_ai::Frame frame;
+    if (!expect(source_error.empty(),
+                "exhausted source construction failed: " + source_error,
+                error)) {
+        return false;
+    }
+    const edge_ai::SourceStatus status = source.next(frame, source_error);
+    return expect(status == edge_ai::SourceStatus::Error,
+                  "exhausted reconnect did not fail", error) &&
+           expect(source.errorKind() == edge_ai::SourceErrorKind::Fatal,
+                  "exhausted reconnect is not Fatal", error) &&
+           expect(source_error.find("reconnect failed") != std::string::npos,
+                  "exhausted reconnect error is unclear: " + source_error,
+                  error) &&
+           expect(factory_calls == 3,
+                  "reconnect attempts did not use the configured budget",
+                  error);
+}
+
+bool testCameraReconnectStop(std::string& error)
+{
+    using Event = ScriptedCameraBackend::Event;
+    std::atomic<bool> stop{false};
+    int factory_calls = 0;
+    const edge_ai::CameraFactory factory =
+        [&](const edge_ai::CameraOptions& options,
+            std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        ++factory_calls;
+        auto backend = std::make_unique<ScriptedCameraBackend>(
+            std::vector<Event>{Event::Lost});
+        return std::make_unique<edge_ai::CameraSource>(
+            options, std::move(backend), open_error);
+    };
+    std::string source_error;
+    edge_ai::ReconnectingCameraSource source(
+        reconnectCameraOptions(), 3, 400, &stop, factory, source_error);
+    if (!expect(source_error.empty(),
+                "stop source construction failed: " + source_error, error)) {
+        return false;
+    }
+
+    edge_ai::SourceStatus status = edge_ai::SourceStatus::Error;
+    std::thread worker([&] {
+        edge_ai::Frame frame;
+        status = source.next(frame, source_error);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    stop.store(true);
+    worker.join();
+    return expect(status == edge_ai::SourceStatus::End,
+                  "stop during reconnect did not return End", error) &&
+           expect(factory_calls == 1,
+                  "stop during reconnect still attempted to reopen", error);
+}
+
+bool testCameraBadFrameSequence(std::string& error)
+{
+    using Event = ScriptedCameraBackend::Event;
+    std::vector<std::vector<Event>> scripts = {{Event::Bad, Event::Frame}};
+    int factory_calls = 0;
+    const edge_ai::CameraFactory factory =
+        [&](const edge_ai::CameraOptions& options,
+            std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        auto backend = std::make_unique<ScriptedCameraBackend>(
+            scripts[static_cast<std::size_t>(factory_calls++)]);
+        return std::make_unique<edge_ai::CameraSource>(
+            options, std::move(backend), open_error);
+    };
+    std::string source_error;
+    edge_ai::ReconnectingCameraSource source(
+        reconnectCameraOptions(), 2, 0, nullptr, factory, source_error);
+    if (!expect(source_error.empty(),
+                "bad-frame source construction failed: " + source_error,
+                error)) {
+        return false;
+    }
+    edge_ai::Frame frame;
+    if (!expect(source.next(frame, source_error) ==
+                    edge_ai::SourceStatus::Error,
+                "bad frame was not reported", error) ||
+        !expect(source.errorKind() == edge_ai::SourceErrorKind::DataError,
+                "bad frame was classified as fatal", error) ||
+        !expect(frame.index == 0, "bad frame did not consume index 0", error)) {
+        return false;
+    }
+    return expect(source.next(frame, source_error) ==
+                      edge_ai::SourceStatus::Frame &&
+                      frame.index == 1,
+                  "frame after bad frame did not use index 1", error);
+}
+
 class FakeTimeoutCameraBackend final : public edge_ai::CameraBackend {
 public:
     FakeTimeoutCameraBackend()
@@ -1024,6 +1242,10 @@ int main(int argc, char* argv[])
         {"camera_busy_error", testCameraBusyError},
         {"camera_read_deadline", testCameraReadDeadline},
         {"camera_colorimetry", testCameraColorimetry},
+        {"camera_reconnect_success", testCameraReconnectSuccess},
+        {"camera_reconnect_exhausted", testCameraReconnectExhausted},
+        {"camera_reconnect_stop", testCameraReconnectStop},
+        {"camera_bad_frame_sequence", testCameraBadFrameSequence},
     };
 
     std::string filter;

@@ -94,12 +94,23 @@ bool ThreadedPipeline::run(
 
     std::function<void()> reader_task = [&] {
         stats.reader_thread = std::this_thread::get_id();
+        std::size_t accepted = 0;
         try {
             while (!stop.load()) {
+                if (pipeline_options_.external_stop != nullptr &&
+                    pipeline_options_.external_stop->load()) {
+                    break;
+                }
                 Frame frame;
                 std::string error;
                 const SourceStatus status = source_.next(frame, error);
                 if (status == SourceStatus::End) {
+                    break;
+                }
+                if (status == SourceStatus::Error &&
+                    source_.errorKind() == SourceErrorKind::Fatal) {
+                    request_stop(error.empty() ? "fatal image source error"
+                                               : error);
                     break;
                 }
                 InputItem item;
@@ -115,6 +126,11 @@ bool ThreadedPipeline::run(
                     item.error = error;
                 }
                 if (!input_queue.push(std::move(item))) {
+                    break;
+                }
+                ++accepted;
+                if (pipeline_options_.max_input_frames != 0 &&
+                    accepted >= pipeline_options_.max_input_frames) {
                     break;
                 }
             }
@@ -205,7 +221,9 @@ bool ThreadedPipeline::run(
             } else {
                 ++batch.error_count;
             }
-            batch.frames.push_back(frame_result);
+            if (pipeline_options_.retain_frames) {
+                batch.frames.push_back(frame_result);
+            }
 
             if (callback) {
                 std::string callback_error;
@@ -231,7 +249,7 @@ bool ThreadedPipeline::run(
     const auto finalize = [&](const std::string& forced_error) {
         stats.input_queue_stats = input_queue.stats();
         stats.result_queue_stats = result_queue.stats();
-        stats.total = batch.frames.size();
+        stats.total = batch.ok_count + batch.ng_count + batch.error_count;
         stats.ok = batch.ok_count;
         stats.ng = batch.ng_count;
         stats.errors = batch.error_count;

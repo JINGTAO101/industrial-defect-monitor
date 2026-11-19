@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -84,6 +85,8 @@ int dequeueCameraBufferOnce(
     void* buffer,
     const std::function<int(int, unsigned long, void*)>& ioctl_fn);
 
+enum class CameraErrorKind { None, BadFrame, Timeout, DeviceLost, Fatal };
+
 std::string normalizeCameraFormat(const std::string& format);
 bool isSupportedCameraFormat(const std::string& format);
 
@@ -95,6 +98,7 @@ public:
     virtual bool nextFrame(std::vector<std::uint8_t>& payload,
                            std::string& error) = 0;
     virtual const CameraInfo& info() const = 0;
+    virtual CameraErrorKind lastErrorKind() const { return CameraErrorKind::None; }
     virtual void close() noexcept = 0;
 };
 
@@ -111,12 +115,60 @@ public:
     SourceStatus next(Frame& frame, std::string& error) override;
 
     const CameraInfo& info() const;
+    CameraErrorKind lastErrorKind() const;
 
 private:
     CameraOptions options_;
     CameraInfo info_;
     std::unique_ptr<CameraBackend> backend_;
     std::size_t next_index_ = 0;
+    CameraErrorKind last_error_kind_ = CameraErrorKind::None;
+};
+
+using CameraFactory =
+    std::function<std::unique_ptr<CameraSource>(const CameraOptions&, std::string&)>;
+
+// Wraps a V4L2 CameraSource and reopens it after a device-loss/timeout.
+// Bad frames are returned as DataError; reconnect exhaustion is Fatal.
+class ReconnectingCameraSource final : public ImageSource {
+public:
+    ReconnectingCameraSource(
+        const CameraOptions& options,
+        int max_attempts,
+        int reconnect_interval_ms,
+        const std::atomic<bool>* external_stop,
+        std::string& error);
+
+    // Test seam: factory creates each CameraSource instance.
+    ReconnectingCameraSource(
+        const CameraOptions& options,
+        int max_attempts,
+        int reconnect_interval_ms,
+        const std::atomic<bool>* external_stop,
+        CameraFactory factory,
+        std::string& error);
+
+    SourceStatus next(Frame& frame, std::string& error) override;
+    SourceErrorKind errorKind() const override;
+    const CameraInfo& info() const;
+    std::size_t reconnectCount() const;
+
+private:
+    enum class ReconnectResult { Success, Stopped, Exhausted };
+
+    bool shouldStop() const;
+    ReconnectResult reconnect(std::string& error);
+
+    CameraOptions options_;
+    int max_attempts_ = 0;
+    int reconnect_interval_ms_ = 0;
+    const std::atomic<bool>* external_stop_ = nullptr;
+    CameraFactory factory_;
+    std::unique_ptr<CameraSource> camera_;
+    CameraInfo info_;
+    std::size_t next_index_ = 0;
+    std::size_t reconnect_count_ = 0;
+    SourceErrorKind error_kind_ = SourceErrorKind::DataError;
 };
 
 }  // namespace edge_ai

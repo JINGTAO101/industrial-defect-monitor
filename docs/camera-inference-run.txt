@@ -1,0 +1,294 @@
+# Task 5B camera inference verification log
+# Date: 2026-11-19
+# Host: Ubuntu 24.04.5 LTS, x86_64
+# No USB camera passthrough; vivid virtual device used. AT-009 remains pending.
+# Model sha256=495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+
+$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$ORT_DIR" -DEDGE_AI_MODEL_PATH="$MODEL_DIR/neu_det_yolov8n_best.onnx" -DEDGE_AI_TEST_IMAGES_DIR="$MODEL_DIR/test-images" -DEDGE_AI_PYTHON="$MODEL_DIR/venv/bin/python"
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found OpenCV: /usr (found version "4.6.0") found components: core imgproc imgcodecs dnn
+-- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.0.13")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- ONNX Runtime headers: /home/ljt/edge-ai-models/onnxruntime-1.32.0/onnxruntime-linux-x64-1.32.0/include
+-- ONNX Runtime library: /home/ljt/edge-ai-models/onnxruntime-1.32.0/onnxruntime-linux-x64-1.32.0/lib/libonnxruntime.so
+-- OpenCV: 4.6.0
+-- Configuring done (1.4s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/ljt/industrial-defect-monitor/build
+
+$ cmake --build build
+[1/24] Building CXX object CMakeFiles/system_info.dir/src/system_info.cpp.o
+[2/24] Linking CXX static library libsystem_info.a
+[3/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/model_contract.cpp.o
+[4/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/quality.cpp.o
+[5/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_preprocess.cpp.o
+[6/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/sha256.cpp.o
+[7/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/postprocess.cpp.o
+[8/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/image_source.cpp.o
+[9/24] Building CXX object CMakeFiles/edge_ai_core.dir/src/camera_source.cpp.o
+[10/24] Linking CXX static library libedge_ai_core.a
+[11/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/batch_processor.cpp.o
+[12/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/threaded_pipeline.cpp.o
+[13/24] Building CXX object CMakeFiles/edge_ai_batch_tests.dir/tests/batch_processor_tests.cpp.o
+[14/24] Building CXX object CMakeFiles/edge_ai_inference.dir/src/model_runner.cpp.o
+[15/24] Linking CXX static library libedge_ai_inference.a
+[16/24] Building CXX object CMakeFiles/edge_ai_tests.dir/tests/unit_tests.cpp.o
+[17/24] Building CXX object CMakeFiles/edge_ai.dir/src/main.cpp.o
+[18/24] Linking CXX executable bin/edge_ai_batch_tests
+[19/24] Linking CXX executable bin/edge_ai_tests
+[20/24] Linking CXX executable bin/edge_ai
+[21/24] Building CXX object CMakeFiles/edge_ai_threaded_tests.dir/tests/threaded_pipeline_tests.cpp.o
+[22/24] Linking CXX executable bin/edge_ai_threaded_tests
+[23/24] Building CXX object CMakeFiles/edge_ai_queue_tests.dir/tests/queue_tests.cpp.o
+[24/24] Linking CXX executable bin/edge_ai_queue_tests
+
+$ ctest --test-dir build --output-on-failure
+Internal ctest changing into directory: /home/ljt/industrial-defect-monitor/build
+Test project /home/ljt/industrial-defect-monitor/build
+      Start  1: batch_source_exception
+ 1/53 Test  #1: batch_source_exception ....................   Passed    0.15 sec
+      Start  2: threaded_normal_drain
+ 2/53 Test  #2: threaded_normal_drain .....................   Passed    0.14 sec
+      Start  3: threaded_full_backpressure
+ 3/53 Test  #3: threaded_full_backpressure ................   Passed    0.16 sec
+      Start  4: threaded_fatal_wakes
+ 4/53 Test  #4: threaded_fatal_wakes ......................   Passed    0.14 sec
+      Start  5: threaded_start_failure_inference
+ 5/53 Test  #5: threaded_start_failure_inference ..........   Passed    0.06 sec
+      Start  6: threaded_start_failure_result
+ 6/53 Test  #6: threaded_start_failure_result .............   Passed    0.06 sec
+      Start  7: threaded_wait_gate_stale_flag
+ 7/53 Test  #7: threaded_wait_gate_stale_flag .............   Passed    0.02 sec
+      Start  8: queue_reject_zero_capacity
+ 8/53 Test  #8: queue_reject_zero_capacity ................   Passed    0.00 sec
+      Start  9: queue_full_blocks
+ 9/53 Test  #9: queue_full_blocks .........................   Passed    0.11 sec
+      Start 10: queue_empty_blocks
+10/53 Test #10: queue_empty_blocks ........................   Passed    0.01 sec
+      Start 11: queue_close_drains
+11/53 Test #11: queue_close_drains ........................   Passed    0.00 sec
+      Start 12: queue_close_wakes_waiters
+12/53 Test #12: queue_close_wakes_waiters .................   Passed    0.01 sec
+      Start 13: queue_concurrent_no_loss
+13/53 Test #13: queue_concurrent_no_loss ..................   Passed    1.44 sec
+      Start 14: unit_preprocess_non_square
+14/53 Test #14: unit_preprocess_non_square ................   Passed    0.12 sec
+      Start 15: unit_postprocess_empty
+15/53 Test #15: unit_postprocess_empty ....................   Passed    0.08 sec
+      Start 16: unit_postprocess_nms_same_class
+16/53 Test #16: unit_postprocess_nms_same_class ...........   Passed    0.08 sec
+      Start 17: unit_postprocess_nms_cross_class
+17/53 Test #17: unit_postprocess_nms_cross_class ..........   Passed    0.08 sec
+      Start 18: unit_postprocess_coordinate_restore
+18/53 Test #18: unit_postprocess_coordinate_restore .......   Passed    0.09 sec
+      Start 19: unit_postprocess_nonfinite
+19/53 Test #19: unit_postprocess_nonfinite ................   Passed    0.08 sec
+      Start 20: unit_postprocess_score_range
+20/53 Test #20: unit_postprocess_score_range ..............   Passed    0.08 sec
+      Start 21: unit_postprocess_shape_mismatch
+21/53 Test #21: unit_postprocess_shape_mismatch ...........   Passed    0.08 sec
+      Start 22: unit_class_mapping_unknown
+22/53 Test #22: unit_class_mapping_unknown ................   Passed    0.07 sec
+      Start 23: unit_contract_validation
+23/53 Test #23: unit_contract_validation ..................   Passed    0.08 sec
+      Start 24: unit_class_metadata_parser
+24/53 Test #24: unit_class_metadata_parser ................   Passed    0.07 sec
+      Start 25: unit_quality_no_defects
+25/53 Test #25: unit_quality_no_defects ...................   Passed    0.07 sec
+      Start 26: unit_quality_single_defect
+26/53 Test #26: unit_quality_single_defect ................   Passed    0.07 sec
+      Start 27: unit_quality_below_threshold
+27/53 Test #27: unit_quality_below_threshold ..............   Passed    0.08 sec
+      Start 28: unit_quality_multiple_defects
+28/53 Test #28: unit_quality_multiple_defects .............   Passed    0.08 sec
+      Start 29: unit_quality_boundary
+29/53 Test #29: unit_quality_boundary .....................   Passed    0.08 sec
+      Start 30: unit_quality_invalid_threshold
+30/53 Test #30: unit_quality_invalid_threshold ............   Passed    0.08 sec
+      Start 31: unit_image_source_single
+31/53 Test #31: unit_image_source_single ..................   Passed    0.08 sec
+      Start 32: unit_image_source_directory
+32/53 Test #32: unit_image_source_directory ...............   Passed    0.08 sec
+      Start 33: unit_camera_missing_device
+33/53 Test #33: unit_camera_missing_device ................   Passed    0.07 sec
+      Start 34: unit_camera_timeout
+34/53 Test #34: unit_camera_timeout .......................   Passed    0.07 sec
+      Start 35: unit_camera_invalid_options
+35/53 Test #35: unit_camera_invalid_options ...............   Passed    0.07 sec
+      Start 36: unit_camera_frame_conversion
+36/53 Test #36: unit_camera_frame_conversion ..............   Passed    0.12 sec
+      Start 37: unit_camera_buffer_validation
+37/53 Test #37: unit_camera_buffer_validation .............   Passed    0.08 sec
+      Start 38: unit_camera_busy_error
+38/53 Test #38: unit_camera_busy_error ....................   Passed    0.08 sec
+      Start 39: unit_camera_read_deadline
+39/53 Test #39: unit_camera_read_deadline .................   Passed    0.28 sec
+      Start 40: unit_camera_colorimetry
+40/53 Test #40: unit_camera_colorimetry ...................   Passed    0.08 sec
+      Start 41: unit_camera_reconnect_success
+41/53 Test #41: unit_camera_reconnect_success .............   Passed    0.08 sec
+      Start 42: unit_camera_reconnect_exhausted
+42/53 Test #42: unit_camera_reconnect_exhausted ...........   Passed    0.08 sec
+      Start 43: unit_camera_reconnect_stop
+43/53 Test #43: unit_camera_reconnect_stop ................   Passed    0.18 sec
+      Start 44: unit_camera_bad_frame_sequence
+44/53 Test #44: unit_camera_bad_frame_sequence ............   Passed    0.07 sec
+      Start 45: cli_behavior
+45/53 Test #45: cli_behavior ..............................   Passed    2.68 sec
+      Start 46: cli_inference_failures
+46/53 Test #46: cli_inference_failures ....................   Passed    0.90 sec
+      Start 47: cli_empty_detections
+47/53 Test #47: cli_empty_detections ......................   Passed    0.18 sec
+      Start 48: cli_path_conflicts
+48/53 Test #48: cli_path_conflicts ........................   Passed    1.05 sec
+      Start 49: cli_batch
+49/53 Test #49: cli_batch .................................   Passed    1.55 sec
+      Start 50: cli_camera
+50/53 Test #50: cli_camera ................................   Passed    0.98 sec
+      Start 51: cpp_reference_comparison
+51/53 Test #51: cpp_reference_comparison ..................   Passed    2.36 sec
+      Start 52: cpp_reference_rejects_incomplete_inputs
+52/53 Test #52: cpp_reference_rejects_incomplete_inputs ...   Passed    0.45 sec
+      Start 53: threaded_batch_reference
+53/53 Test #53: threaded_batch_reference ..................   Passed    0.80 sec
+
+100% tests passed, 0 tests failed out of 53
+
+Total Test time (real) =  16.10 sec
+
+$ v4l2-ctl -d /dev/video0 --set-fmt-video=width=640,height=480,pixelformat=YUYV --set-parm=30
+Frame rate set to 30.000 fps
+
+$ edge_ai --model ... --camera /dev/video0 --max-frames 30 --queue-capacity 1 --conf 0.25 --iou 0.45
+ONNX Runtime 1.32.0 providers=CPUExecutionProvider
+model: /home/ljt/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx
+model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+input:  images [1, 3, 640, 640] tensor(float)
+output: output0 [1, 10, 8400] tensor(float)
+classes: 0=crazing, 1=inclusion, 2=patches, 3=pitted_surface, 4=rolled-in_scale, 5=scratches
+camera: /dev/video0
+requested: YUYV 640x480 @ 30 fps
+actual: YUYV 640x480 @ 30.000 fps colorspace=sRGB ycbcr=default quantization=default
+camera reconnect: attempts=3 interval_ms=1000
+queues: capacity=1
+[NG] index=0 source=/dev/video0 detections=6
+[NG] index=1 source=/dev/video0 detections=6
+[NG] index=2 source=/dev/video0 detections=6
+[NG] index=3 source=/dev/video0 detections=6
+[NG] index=4 source=/dev/video0 detections=6
+[NG] index=5 source=/dev/video0 detections=6
+[NG] index=6 source=/dev/video0 detections=6
+[NG] index=7 source=/dev/video0 detections=6
+[NG] index=8 source=/dev/video0 detections=6
+[NG] index=9 source=/dev/video0 detections=6
+[NG] index=10 source=/dev/video0 detections=6
+[NG] index=11 source=/dev/video0 detections=6
+[NG] index=12 source=/dev/video0 detections=6
+[NG] index=13 source=/dev/video0 detections=6
+[NG] index=14 source=/dev/video0 detections=6
+[NG] index=15 source=/dev/video0 detections=6
+[NG] index=16 source=/dev/video0 detections=6
+[NG] index=17 source=/dev/video0 detections=6
+[NG] index=18 source=/dev/video0 detections=6
+[NG] index=19 source=/dev/video0 detections=6
+[NG] index=20 source=/dev/video0 detections=6
+[NG] index=21 source=/dev/video0 detections=6
+[NG] index=22 source=/dev/video0 detections=6
+[NG] index=23 source=/dev/video0 detections=6
+[NG] index=24 source=/dev/video0 detections=6
+[NG] index=25 source=/dev/video0 detections=6
+[NG] index=26 source=/dev/video0 detections=6
+[NG] index=27 source=/dev/video0 detections=6
+[NG] index=28 source=/dev/video0 detections=6
+[NG] index=29 source=/dev/video0 detections=6
+threads: reader=138186668463744 inference=138186660071040 result=138186651678336
+queues: input capacity=1 max_depth=1 producer_waits=28; result capacity=1 max_depth=1 producer_waits=0
+summary: total=30 ok=0 ng=30 errors=0 reconnect_count=0 stopped=0
+
+$ timeout --preserve-status -s INT 2s edge_ai --model ... --camera /dev/video0 --max-frames 1000 --queue-capacity 1 ...
+ONNX Runtime 1.32.0 providers=CPUExecutionProvider
+model: /home/ljt/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx
+model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+input:  images [1, 3, 640, 640] tensor(float)
+output: output0 [1, 10, 8400] tensor(float)
+classes: 0=crazing, 1=inclusion, 2=patches, 3=pitted_surface, 4=rolled-in_scale, 5=scratches
+camera: /dev/video0
+requested: YUYV 640x480 @ 30 fps
+actual: YUYV 640x480 @ 30.000 fps colorspace=sRGB ycbcr=default quantization=default
+camera reconnect: attempts=3 interval_ms=1000
+queues: capacity=1
+[NG] index=0 source=/dev/video0 detections=6
+[NG] index=1 source=/dev/video0 detections=6
+[NG] index=2 source=/dev/video0 detections=6
+[NG] index=3 source=/dev/video0 detections=6
+[NG] index=4 source=/dev/video0 detections=6
+[NG] index=5 source=/dev/video0 detections=6
+[NG] index=6 source=/dev/video0 detections=6
+[NG] index=7 source=/dev/video0 detections=6
+[NG] index=8 source=/dev/video0 detections=6
+[NG] index=9 source=/dev/video0 detections=6
+[NG] index=10 source=/dev/video0 detections=6
+[NG] index=11 source=/dev/video0 detections=6
+[NG] index=12 source=/dev/video0 detections=6
+[NG] index=13 source=/dev/video0 detections=6
+[NG] index=14 source=/dev/video0 detections=6
+[NG] index=15 source=/dev/video0 detections=6
+[NG] index=16 source=/dev/video0 detections=6
+[NG] index=17 source=/dev/video0 detections=6
+[NG] index=18 source=/dev/video0 detections=6
+[NG] index=19 source=/dev/video0 detections=6
+[NG] index=20 source=/dev/video0 detections=6
+[NG] index=21 source=/dev/video0 detections=6
+[NG] index=22 source=/dev/video0 detections=6
+[NG] index=23 source=/dev/video0 detections=6
+[NG] index=24 source=/dev/video0 detections=6
+[NG] index=25 source=/dev/video0 detections=6
+[NG] index=26 source=/dev/video0 detections=6
+[NG] index=27 source=/dev/video0 detections=6
+[NG] index=28 source=/dev/video0 detections=6
+threads: reader=137442862560896 inference=137442778674816 result=137442770282112
+queues: input capacity=1 max_depth=1 producer_waits=27; result capacity=1 max_depth=1 producer_waits=0
+summary: total=29 ok=0 ng=29 errors=0 reconnect_count=0 stopped=1
+camera stopped by SIGINT; accepted frames drained
+# exit code: 0
+
+$ v4l2-ctl -d /dev/video0 --set-ctrl inject_v4l2_buf_flag_error=1
+$ edge_ai --model ... --camera /dev/video0 --max-frames 5 --queue-capacity 1 ...
+ONNX Runtime 1.32.0 providers=CPUExecutionProvider
+model: /home/ljt/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx
+model sha256: 495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
+input:  images [1, 3, 640, 640] tensor(float)
+output: output0 [1, 10, 8400] tensor(float)
+classes: 0=crazing, 1=inclusion, 2=patches, 3=pitted_surface, 4=rolled-in_scale, 5=scratches
+camera: /dev/video0
+requested: YUYV 640x480 @ 30 fps
+actual: YUYV 640x480 @ 30.000 fps colorspace=sRGB ycbcr=default quantization=default
+camera reconnect: attempts=3 interval_ms=1000
+queues: capacity=1
+[ERROR] index=0 source=/dev/video0: camera frame marked with V4L2_BUF_FLAG_ERROR
+[NG] index=1 source=/dev/video0 detections=6
+[NG] index=2 source=/dev/video0 detections=6
+[NG] index=3 source=/dev/video0 detections=6
+[NG] index=4 source=/dev/video0 detections=6
+threads: reader=138868631594624 inference=138868623201920 result=138868614809216
+queues: input capacity=1 max_depth=1 producer_waits=2; result capacity=1 max_depth=1 producer_waits=0
+summary: total=5 ok=0 ng=4 errors=1 reconnect_count=0 stopped=0
+# exit code: 0
+
+# Simulated reconnect tests
+$ ./build/bin/edge_ai_tests camera_reconnect_success
+[PASS] camera_reconnect_success
+1 test(s), 0 failure(s)
+$ ./build/bin/edge_ai_tests camera_reconnect_exhausted
+[PASS] camera_reconnect_exhausted
+1 test(s), 0 failure(s)
+$ ./build/bin/edge_ai_tests camera_reconnect_stop
+[PASS] camera_reconnect_stop
+1 test(s), 0 failure(s)

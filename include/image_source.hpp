@@ -24,6 +24,7 @@ struct Frame {
 };
 
 enum class SourceStatus { Frame, End, Error };
+enum class SourceErrorKind { DataError, Fatal };
 
 class ImageSource {
 public:
@@ -32,6 +33,10 @@ public:
     // Returns Frame on success, End when exhausted, or Error with a diagnostic
     // in `error`. On Error, `frame.source` identifies the failing file.
     virtual SourceStatus next(Frame& frame, std::string& error) = 0;
+
+    // DataError is a per-item failure (continue processing); Fatal means the
+    // source cannot continue and the pipeline must stop after joining.
+    virtual SourceErrorKind errorKind() const { return SourceErrorKind::DataError; }
 
     // Number of regular files in a directory source skipped because their
     // extension is not a supported image format.

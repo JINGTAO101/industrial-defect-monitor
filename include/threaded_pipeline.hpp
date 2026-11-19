@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <string>
@@ -31,6 +32,13 @@ struct PipelineOptions {
     std::function<void(std::size_t)> result_depth_hook;
     // Optional injection point for thread-start failure tests.
     ThreadFactory thread_factory;
+    // Graceful external stop (Ctrl+C): stop reading, then drain accepted
+    // frames through inference and the result thread.
+    const std::atomic<bool>* external_stop = nullptr;
+    // 0 = unlimited. Counts every accepted input item, including bad frames.
+    std::size_t max_input_frames = 0;
+    // Batch mode keeps all frames; camera mode disables this to bound memory.
+    bool retain_frames = true;
 };
 
 struct PipelineStats {

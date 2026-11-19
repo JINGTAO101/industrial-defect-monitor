@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <csignal>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -32,6 +34,13 @@ namespace {
 
 constexpr std::string_view kProgram = "edge_ai";
 
+std::atomic<bool> g_stop_requested{false};
+
+void handleSigint(int)
+{
+    g_stop_requested.store(true);
+}
+
 struct Options {
     bool show_help = false;
     bool show_version = false;
@@ -55,6 +64,9 @@ struct Options {
     int camera_fps = 30;
     int camera_timeout_ms = 2000;
     bool camera_options_set = false;
+    int reconnect_attempts = 3;
+    int reconnect_interval_ms = 1000;
+    bool reconnect_options_set = false;
 };
 
 void printUsage(std::ostream& os)
@@ -86,6 +98,8 @@ void printUsage(std::ostream& os)
        << "  --camera-height <n>   Requested height (default 480)\n"
        << "  --camera-fps <n>      Requested fps (default 30)\n"
        << "  --camera-timeout-ms <n> Read timeout in ms (default 2000)\n"
+       << "  --camera-reconnect-attempts <n> Reopen attempts after device loss (default 3)\n"
+       << "  --camera-reconnect-interval-ms <n> Delay between attempts (default 1000)\n"
        << "\n"
        << "Supported image extensions: jpg, jpeg, png, bmp, tif, tiff.\n"
        << "Batch processing continues after corrupt images, reports per-file errors,\n"
@@ -468,6 +482,22 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
                 return false;
             }
             options.camera_options_set = true;
+        } else if (option == "--camera-reconnect-attempts") {
+            std::string value;
+            if (!take_value("--camera-reconnect-attempts", value) ||
+                !parsePositiveIntOption("--camera-reconnect-attempts", value,
+                                        options.reconnect_attempts, error)) {
+                return false;
+            }
+            options.reconnect_options_set = true;
+        } else if (option == "--camera-reconnect-interval-ms") {
+            std::string value;
+            if (!take_value("--camera-reconnect-interval-ms", value) ||
+                !parsePositiveIntOption("--camera-reconnect-interval-ms", value,
+                                        options.reconnect_interval_ms, error)) {
+                return false;
+            }
+            options.reconnect_options_set = true;
         } else if (!option.empty() && option.front() == '-') {
             error = "unknown option '" + option + "'";
             return false;
@@ -497,17 +527,32 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
             return false;
         }
         if (options.queue_capacity_set) {
-            error = "--queue-capacity is for batch inference, not capture-only";
+            error = "--queue-capacity is for inference pipelines, not capture-only";
+            return false;
+        }
+        if (options.reconnect_options_set) {
+            error = "camera reconnect options require camera inference, not --capture-only";
             return false;
         }
         return true;
     }
     if (has_camera) {
-        error = "--camera requires --capture-only";
-        return false;
+        if (options.model_path.empty()) {
+            error = "--camera requires --model or --capture-only";
+            return false;
+        }
+        if (!options.image_path.empty() || !options.image_dir.empty()) {
+            error = "--camera cannot be combined with --image/--image-dir";
+            return false;
+        }
+        if (!options.json_out.empty() || !options.dump_input.empty()) {
+            error = "--camera does not support --json-out/--dump-input";
+            return false;
+        }
+        return true;
     }
-    if (options.camera_options_set) {
-        error = "camera options require --capture-only";
+    if (options.camera_options_set || options.reconnect_options_set) {
+        error = "camera options require --camera";
         return false;
     }
 
@@ -1105,9 +1150,8 @@ int runBatch(const Options& options)
     return batch.error_count == 0 ? 0 : 1;
 }
 
-int runCapture(const Options& options)
+edge_ai::CameraOptions makeCameraOptions(const Options& options)
 {
-    std::string error;
     edge_ai::CameraOptions camera_options;
     camera_options.device = options.camera_path;
     camera_options.format = options.camera_format;
@@ -1115,7 +1159,13 @@ int runCapture(const Options& options)
     camera_options.height = options.camera_height;
     camera_options.fps = options.camera_fps;
     camera_options.timeout_ms = options.camera_timeout_ms;
+    return camera_options;
+}
 
+int runCapture(const Options& options)
+{
+    std::string error;
+    const edge_ai::CameraOptions camera_options = makeCameraOptions(options);
     edge_ai::CameraSource camera(camera_options, error);
     if (!error.empty()) {
         std::cerr << kProgram << ": " << error << "\n";
@@ -1145,6 +1195,9 @@ int runCapture(const Options& options)
     std::size_t first_index = 0;
     std::size_t last_index = 0;
     for (std::size_t i = 0; i < options.max_frames; ++i) {
+        if (g_stop_requested.load()) {
+            break;
+        }
         edge_ai::Frame frame;
         const edge_ai::SourceStatus status = camera.next(frame, error);
         if (status != edge_ai::SourceStatus::Frame) {
@@ -1183,6 +1236,107 @@ int runCapture(const Options& options)
     return 0;
 }
 
+int runCameraInference(const Options& options)
+{
+    std::string error;
+    const edge_ai::CameraOptions camera_options = makeCameraOptions(options);
+    edge_ai::ReconnectingCameraSource camera(
+        camera_options, options.reconnect_attempts,
+        options.reconnect_interval_ms, &g_stop_requested, error);
+    if (!error.empty()) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    const auto runner = edge_ai::ModelRunner::load(options.model_path, error);
+    if (!runner) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    const edge_ai::PostprocessOptions postprocess_options{
+        options.conf_threshold, options.iou_threshold};
+    edge_ai::PipelineOptions pipeline_options;
+    pipeline_options.input_queue_capacity = options.queue_capacity;
+    pipeline_options.result_queue_capacity = options.queue_capacity;
+    pipeline_options.external_stop = &g_stop_requested;
+    pipeline_options.max_input_frames = options.max_frames;
+    pipeline_options.retain_frames = false;
+    edge_ai::ThreadedPipeline pipeline(camera, *runner, postprocess_options,
+                                      pipeline_options);
+
+    printModelInfo(runner->info());
+    const edge_ai::CameraInfo& info = camera.info();
+    std::cout << "camera: " << info.device << "\n";
+    std::cout << "requested: " << info.requested_format << " "
+              << info.requested_width << "x" << info.requested_height
+              << " @ " << info.requested_fps << " fps\n";
+    std::cout << "actual: " << info.actual_format << " "
+              << info.actual_width << "x" << info.actual_height << " @ ";
+    if (info.actual_fps > 0.0) {
+        std::cout << std::fixed << std::setprecision(3) << info.actual_fps
+                  << std::defaultfloat;
+    } else {
+        std::cout << "unknown";
+    }
+    std::cout << " fps colorspace=" << info.colorspace
+              << " ycbcr=" << info.ycbcr_encoding
+              << " quantization=" << info.quantization << "\n";
+    std::cout << "camera reconnect: attempts=" << options.reconnect_attempts
+              << " interval_ms=" << options.reconnect_interval_ms << "\n";
+    std::cout << "queues: capacity=" << options.queue_capacity << "\n";
+
+    const edge_ai::ResultCallback callback =
+        [](const edge_ai::FrameResult& frame, std::string&) {
+            if (!frame.error.empty()) {
+                std::cout << "[ERROR] index=" << frame.index
+                          << " source=" << frame.source << ": "
+                          << frame.error << "\n";
+            } else {
+                std::cout << "["
+                          << edge_ai::qualityLabel(frame.quality.is_ng)
+                          << "] index=" << frame.index
+                          << " source=" << frame.source
+                          << " detections=" << frame.detections.size()
+                          << "\n";
+            }
+            for (const auto& anomaly : frame.anomalies) {
+                std::cerr << "warning: " << frame.source << ": " << anomaly
+                          << "\n";
+            }
+            return true;
+        };
+
+    edge_ai::BatchResult batch;
+    edge_ai::PipelineStats stats;
+    std::string fatal_error;
+    if (!pipeline.run(batch, stats, callback, fatal_error)) {
+        std::cerr << kProgram << ": camera pipeline failed: " << fatal_error
+                  << "\n";
+        return 1;
+    }
+
+    std::cout << "threads: reader=" << stats.reader_thread
+              << " inference=" << stats.inference_thread
+              << " result=" << stats.result_thread << "\n";
+    std::cout << "queues: input capacity=" << stats.input_queue_capacity
+              << " max_depth=" << stats.input_queue_stats.max_depth
+              << " producer_waits="
+              << stats.input_queue_stats.producer_wait_count
+              << "; result capacity=" << stats.result_queue_capacity
+              << " max_depth=" << stats.result_queue_stats.max_depth
+              << " producer_waits="
+              << stats.result_queue_stats.producer_wait_count << "\n";
+    std::cout << "summary: total=" << stats.total << " ok=" << stats.ok
+              << " ng=" << stats.ng << " errors=" << stats.errors
+              << " reconnect_count=" << camera.reconnectCount()
+              << " stopped=" << (g_stop_requested.load() ? 1 : 0) << "\n";
+    if (g_stop_requested.load()) {
+        std::cout << "camera stopped by SIGINT; accepted frames drained\n";
+    }
+    return 0;
+}
+
 int runInference(const Options& options)
 {
     std::vector<std::string> input_images;
@@ -1208,6 +1362,7 @@ int runInference(const Options& options)
 
 int main(int argc, char* argv[])
 {
+    std::signal(SIGINT, handleSigint);
     Options options;
     std::string error;
     if (!parseOptions(argc, argv, options, error)) {
@@ -1224,6 +1379,9 @@ int main(int argc, char* argv[])
     }
     if (options.capture_only) {
         return runCapture(options);
+    }
+    if (!options.camera_path.empty()) {
+        return runCameraInference(options);
     }
     if (options.model_path.empty()) {
         std::cout << "====================================\n";

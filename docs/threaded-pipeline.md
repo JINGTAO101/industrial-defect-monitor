@@ -127,7 +127,7 @@ ctest --test-dir build --output-on-failure
 | `threaded_wait_gate_stale_flag` | 队列腾出位置但旧等待标志未清除时门槛不通过 |
 | `threaded_batch_reference` | 六图真实模型批量顺序/检测结果与参考一致（可选） |
 
-本次配置总计 49/49 通过；不提供真实模型/六图时 46 个测试通过。
+本次配置总计 53/53 通过；不提供真实模型/六图时 50 个测试通过。
 
 ## 5. 限制
 

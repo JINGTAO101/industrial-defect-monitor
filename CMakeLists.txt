@@ -222,7 +222,11 @@ if(BUILD_TESTING)
             camera_buffer_validation
             camera_busy_error
             camera_read_deadline
-            camera_colorimetry)
+            camera_colorimetry
+            camera_reconnect_success
+            camera_reconnect_exhausted
+            camera_reconnect_stop
+            camera_bad_frame_sequence)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
     endforeach()
 
