@@ -896,6 +896,7 @@ SourceStatus ReconnectingCameraSource::next(Frame& frame, std::string& error)
         if (!camera_) {
             const ReconnectResult reconnect_result = reconnect(error);
             if (reconnect_result == ReconnectResult::Stopped) {
+                error.clear();
                 return SourceStatus::End;
             }
             if (reconnect_result == ReconnectResult::Exhausted) {
@@ -963,6 +964,7 @@ SourceStatus ReconnectingCameraSource::next(Frame& frame, std::string& error)
         }
         const ReconnectResult reconnect_result = reconnect(error);
         if (reconnect_result == ReconnectResult::Stopped) {
+            error.clear();
             return SourceStatus::End;
         }
         if (reconnect_result == ReconnectResult::Exhausted) {
@@ -1001,6 +1003,14 @@ ReconnectingCameraSource::ReconnectResult ReconnectingCameraSource::reconnect(
         } catch (const std::exception& exception) {
             open_error = std::string("camera reopen failed: ") +
                          exception.what();
+        }
+        // Ctrl+C may arrive while the factory is opening the device. Treat
+        // that as a normal stop before judging the reopen result, otherwise
+        // an open that failed after SIGINT would report budget exhaustion and
+        // skip draining already-queued frames.
+        if (shouldStop()) {
+            error = "camera reconnect stopped";
+            return ReconnectResult::Stopped;
         }
         // Production factories return a non-null object even when opening
         // failed, so only a null pointer is not a sufficient failure test.

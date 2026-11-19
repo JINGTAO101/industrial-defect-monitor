@@ -41,6 +41,9 @@ CameraSource (V4L2)
   CLI 输出 `camera pipeline failed` 并以 1 退出。
 - 重连等待按小片（≤50ms）检查外部停止标志；读取中的 `poll` 也按 50ms
   分片，因此设备无帧时 Ctrl+C 可在约 50ms 内结束等待，而不是等满读超时。
+- 工厂调用返回后、判定重开结果前再检查一次停止标志：若 Ctrl+C 在打开过程
+  中到达，即使该次打开随后失败，也按正常停止返回 End 并排空已入队帧，不会
+  误报重连耗尽。
 
 ## 3. CLI
 
@@ -130,6 +133,7 @@ summary: total=5 ok=0 ng=4 errors=1 reconnect_count=0 stopped=0
 | `unit_camera_reconnect_open_error` | 工厂返回“非空对象 + 打开错误”时仍计为失败，耗尽后 Fatal |
 | `unit_camera_reconnect_no_frame_budget` | 每次重开成功但读帧始终超时；预算 3 时只重开 3 次即耗尽 |
 | `unit_camera_reconnect_stop` | 重连等待期间设置停止标志，返回 End 且不再尝试重开 |
+| `unit_camera_reconnect_stop_during_open` | 最后一次重开在返回错误前收到停止；按正常停止返回 End 且错误为空，不报耗尽 |
 | `unit_camera_bad_frame_sequence` | 坏帧计为 DataError，不做判定；后续好帧序号继续递增 |
 | `unit_camera_read_stop` | 3 秒读超时中设置停止，poll 分片使等待在 1 秒内结束 |
 | `unit_camera_source_external_stop` | 停止标志传递到后端，阻塞读返回 End 而非错误 |
@@ -142,7 +146,7 @@ summary: total=5 ok=0 ng=4 errors=1 reconnect_count=0 stopped=0
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **59/59 通过**；无模型/图片/摄像头时 56 个测试通过。
+本次完整套件 **60/60 通过**；无模型/图片/摄像头时 57 个测试通过。
 
 ## 7. 限制与待确认
 

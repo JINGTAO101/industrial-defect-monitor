@@ -150,11 +150,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 56 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 57 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
 重连/停止）；提供 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和
 `EDGE_AI_PYTHON` 时额外运行六图对照、对照守卫和线程化批量对照测试，共
-59 个。
+60 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -214,6 +214,8 @@ ctest --test-dir build --output-on-failure
 - `camera_reconnect_open_error`：工厂返回“非空对象 + 错误”仍按失败处理；
 - `camera_reconnect_no_frame_budget`：重开成功但始终无帧，累计预算只重开 3 次；
 - `camera_reconnect_stop`：重连等待期间停止，返回 End 且不再重开；
+- `camera_reconnect_stop_during_open`：最后一次重开途中停止，按正常停止返回
+  End 且错误为空，不报重连耗尽；
 - `camera_bad_frame_sequence`：坏帧只记 DataError，后续好帧序号继续；
 - `camera_read_stop` / `camera_source_external_stop`：3 秒读超时期间停止可在
   1 秒内结束并返回 End；
@@ -381,7 +383,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 59/59（含 5B 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 60/60（含 5B 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 

@@ -231,6 +231,7 @@ if(BUILD_TESTING)
             camera_reconnect_open_error
             camera_reconnect_no_frame_budget
             camera_reconnect_stop
+            camera_reconnect_stop_during_open
             camera_bad_frame_sequence)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
     endforeach()

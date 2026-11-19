@@ -1257,6 +1257,59 @@ bool testCameraReconnectStop(std::string& error)
                   "stop during reconnect still attempted to reopen", error);
 }
 
+bool testCameraReconnectStopDuringOpen(std::string& error)
+{
+    using Event = ScriptedCameraBackend::Event;
+    std::atomic<bool> stop{false};
+    std::vector<std::string> logs;
+    int factory_calls = 0;
+    const edge_ai::CameraFactory factory =
+        [&](const edge_ai::CameraOptions& options,
+            std::string& open_error) -> std::unique_ptr<edge_ai::CameraSource> {
+        ++factory_calls;
+        if (factory_calls == 3) {
+            // Ctrl+C arrives while the final reopen is in flight; the open
+            // then fails and returns a non-null object with an error.
+            stop.store(true);
+            return std::make_unique<edge_ai::CameraSource>(
+                options, std::unique_ptr<edge_ai::CameraBackend>{}, open_error);
+        }
+        auto backend = std::make_unique<ScriptedCameraBackend>(
+            std::vector<Event>{Event::Lost});
+        return std::make_unique<edge_ai::CameraSource>(
+            options, std::move(backend), open_error);
+    };
+    std::string source_error;
+    edge_ai::ReconnectingCameraSource source(
+        reconnectCameraOptions(), 2, 0, &stop, factory, source_error,
+        [&logs](const std::string& message) { logs.push_back(message); });
+    if (!expect(source_error.empty(),
+                "stop-during-open source construction failed: " + source_error,
+                error)) {
+        return false;
+    }
+    edge_ai::Frame frame;
+    const edge_ai::SourceStatus status = source.next(frame, source_error);
+    if (!expect(status == edge_ai::SourceStatus::End,
+                "stop during the final reopen did not return End", error) ||
+        !expect(source_error.empty(),
+                "stop during the final reopen left an error: " + source_error,
+                error) ||
+        !expect(factory_calls == 3,
+                "stop during the final reopen made unexpected open calls",
+                error)) {
+        return false;
+    }
+    for (const std::string& entry : logs) {
+        if (!expect(entry.find("reconnect failed") == std::string::npos,
+                    "stop during reopen was logged as exhaustion: " + entry,
+                    error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool testCameraBadFrameSequence(std::string& error)
 {
     using Event = ScriptedCameraBackend::Event;
@@ -1512,6 +1565,8 @@ int main(int argc, char* argv[])
         {"camera_reconnect_open_error", testCameraReconnectOpenError},
         {"camera_reconnect_no_frame_budget", testCameraReconnectNoFrameBudget},
         {"camera_reconnect_stop", testCameraReconnectStop},
+        {"camera_reconnect_stop_during_open",
+         testCameraReconnectStopDuringOpen},
         {"camera_bad_frame_sequence", testCameraBadFrameSequence},
     };
 
