@@ -4,6 +4,8 @@
 # Toolchain: GCC/G++ 13.3.0; CMake 3.28.3; OpenCV 4.6.0; OpenSSL 3.0.13; ONNX Runtime C++ 1.32.0 CPU
 # Model sha256=495ad53dbff99bcbf629ec67f90e1e627800ab8db78177de592648b6e00345b1
 
+# Note: this log was captured at task 4B (40 tests). Task 5A adds 5 camera
+# tests; see docs/v4l2-camera.md and docs/v4l2-capture-run.txt for that evidence.
 $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT="$ORT_DIR" -DEDGE_AI_MODEL_PATH="$MODEL_DIR/neu_det_yolov8n_best.onnx" -DEDGE_AI_TEST_IMAGES_DIR="$MODEL_DIR/test-images" -DEDGE_AI_PYTHON="$MODEL_DIR/venv/bin/python"
 -- The CXX compiler identification is GNU 13.3.0
 -- Detecting CXX compiler ABI info

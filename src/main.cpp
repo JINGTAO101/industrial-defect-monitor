@@ -16,6 +16,7 @@
 #include <opencv2/core.hpp>
 
 #include "batch_processor.hpp"
+#include "camera_source.hpp"
 #include "image_source.hpp"
 #include "model_runner.hpp"
 #include "postprocess.hpp"
@@ -43,6 +44,17 @@ struct Options {
     float iou_threshold = 0.45f;
     std::size_t queue_capacity = 4;
     bool queue_capacity_set = false;
+
+    std::string camera_path;
+    bool capture_only = false;
+    std::size_t max_frames = 30;
+    std::size_t max_frames_set = false;
+    std::string camera_format = "YUYV";
+    int camera_width = 640;
+    int camera_height = 480;
+    int camera_fps = 30;
+    int camera_timeout_ms = 2000;
+    bool camera_options_set = false;
 };
 
 void printUsage(std::ostream& os)
@@ -64,6 +76,16 @@ void printUsage(std::ostream& os)
        << "  --json-out <path>    Write detection JSON (single result or batch summary)\n"
        << "  --dump-input <path>  Write the float32 NCHW input tensor (single image only)\n"
        << "  --queue-capacity <n> Batch pipeline queue size (>0, default 4)\n"
+       << "\n"
+       << "Camera capture (independent of model/image input):\n"
+       << "  --camera <path>       V4L2 device (e.g. /dev/video0)\n"
+       << "  --capture-only        Capture frames without model inference\n"
+       << "  --max-frames <n>      Frames to capture (default 30)\n"
+       << "  --camera-format <f>   MJPG or YUYV (default YUYV)\n"
+       << "  --camera-width <n>    Requested width (default 640)\n"
+       << "  --camera-height <n>   Requested height (default 480)\n"
+       << "  --camera-fps <n>      Requested fps (default 30)\n"
+       << "  --camera-timeout-ms <n> Read timeout in ms (default 2000)\n"
        << "\n"
        << "Supported image extensions: jpg, jpeg, png, bmp, tif, tiff.\n"
        << "Batch processing continues after corrupt images, reports per-file errors,\n"
@@ -120,6 +142,24 @@ bool parseSizeOption(
         error = "invalid value for " + name + ": '" + value + "'";
         return false;
     }
+}
+
+bool parsePositiveIntOption(
+    const std::string& name,
+    const std::string& value,
+    int& output,
+    std::string& error)
+{
+    std::size_t parsed = 0;
+    if (!parseSizeOption(name, value, parsed, error)) {
+        return false;
+    }
+    if (parsed > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        error = name + " is too large";
+        return false;
+    }
+    output = static_cast<int>(parsed);
+    return true;
 }
 
 bool parseFloatOption(
@@ -363,6 +403,71 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
                 return false;
             }
             options.queue_capacity_set = true;
+        } else if (option == "--camera") {
+            if (!take_value("--camera", options.camera_path)) {
+                return false;
+            }
+        } else if (option == "--capture-only") {
+            if (has_inline_value) {
+                error = "--capture-only does not take a value";
+                return false;
+            }
+            options.capture_only = true;
+        } else if (option == "--max-frames") {
+            std::string value;
+            if (!take_value("--max-frames", value) ||
+                !parseSizeOption("--max-frames", value,
+                                 options.max_frames, error)) {
+                return false;
+            }
+            options.max_frames_set = true;
+            options.camera_options_set = true;
+        } else if (option == "--camera-format") {
+            std::string value;
+            if (!take_value("--camera-format", value)) {
+                return false;
+            }
+            const std::string normalized =
+                edge_ai::normalizeCameraFormat(value);
+            if (normalized.empty()) {
+                error = "unsupported camera format: '" + value +
+                        "' (supported: MJPG, YUYV)";
+                return false;
+            }
+            options.camera_format = normalized;
+            options.camera_options_set = true;
+        } else if (option == "--camera-width") {
+            std::string value;
+            if (!take_value("--camera-width", value) ||
+                !parsePositiveIntOption("--camera-width", value,
+                                        options.camera_width, error)) {
+                return false;
+            }
+            options.camera_options_set = true;
+        } else if (option == "--camera-height") {
+            std::string value;
+            if (!take_value("--camera-height", value) ||
+                !parsePositiveIntOption("--camera-height", value,
+                                        options.camera_height, error)) {
+                return false;
+            }
+            options.camera_options_set = true;
+        } else if (option == "--camera-fps") {
+            std::string value;
+            if (!take_value("--camera-fps", value) ||
+                !parsePositiveIntOption("--camera-fps", value,
+                                        options.camera_fps, error)) {
+                return false;
+            }
+            options.camera_options_set = true;
+        } else if (option == "--camera-timeout-ms") {
+            std::string value;
+            if (!take_value("--camera-timeout-ms", value) ||
+                !parsePositiveIntOption("--camera-timeout-ms", value,
+                                        options.camera_timeout_ms, error)) {
+                return false;
+            }
+            options.camera_options_set = true;
         } else if (!option.empty() && option.front() == '-') {
             error = "unknown option '" + option + "'";
             return false;
@@ -374,6 +479,36 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
 
     if (options.show_help || options.show_version) {
         return true;
+    }
+
+    const bool has_camera = !options.camera_path.empty();
+    if (options.capture_only) {
+        if (!has_camera) {
+            error = "--capture-only requires --camera";
+            return false;
+        }
+        if (!options.model_path.empty() || !options.image_path.empty() ||
+            !options.image_dir.empty()) {
+            error = "--capture-only cannot be combined with model/image inputs";
+            return false;
+        }
+        if (!options.json_out.empty() || !options.dump_input.empty()) {
+            error = "--capture-only does not support --json-out/--dump-input";
+            return false;
+        }
+        if (options.queue_capacity_set) {
+            error = "--queue-capacity is for batch inference, not capture-only";
+            return false;
+        }
+        return true;
+    }
+    if (has_camera) {
+        error = "--camera requires --capture-only";
+        return false;
+    }
+    if (options.camera_options_set) {
+        error = "camera options require --capture-only";
+        return false;
     }
 
     const bool has_single_image = !options.image_path.empty();
@@ -970,6 +1105,71 @@ int runBatch(const Options& options)
     return batch.error_count == 0 ? 0 : 1;
 }
 
+int runCapture(const Options& options)
+{
+    std::string error;
+    edge_ai::CameraOptions camera_options;
+    camera_options.device = options.camera_path;
+    camera_options.format = options.camera_format;
+    camera_options.width = options.camera_width;
+    camera_options.height = options.camera_height;
+    camera_options.fps = options.camera_fps;
+    camera_options.timeout_ms = options.camera_timeout_ms;
+
+    edge_ai::CameraSource camera(camera_options, error);
+    if (!error.empty()) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    const edge_ai::CameraInfo& info = camera.info();
+    std::cout << "camera: " << info.device << "\n";
+    std::cout << "requested: " << info.requested_format << " "
+              << info.requested_width << "x" << info.requested_height
+              << " @ " << info.requested_fps << " fps timeout="
+              << options.camera_timeout_ms << " ms\n";
+    std::cout << "actual: " << info.actual_format << " "
+              << info.actual_width << "x" << info.actual_height << " @ "
+              << std::fixed << std::setprecision(3) << info.actual_fps
+              << std::defaultfloat << " fps bytes_per_line="
+              << info.bytes_per_line << "\n";
+
+    std::size_t captured = 0;
+    std::size_t first_index = 0;
+    std::size_t last_index = 0;
+    for (std::size_t i = 0; i < options.max_frames; ++i) {
+        edge_ai::Frame frame;
+        const edge_ai::SourceStatus status = camera.next(frame, error);
+        if (status != edge_ai::SourceStatus::Frame) {
+            std::cerr << kProgram << ": camera capture failed: "
+                      << (error.empty() ? "camera ended early" : error)
+                      << "\n";
+            return 1;
+        }
+        if (captured == 0) {
+            first_index = frame.index;
+        }
+        last_index = frame.index;
+        ++captured;
+        const auto timestamp_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                frame.timestamp.time_since_epoch())
+                .count();
+        std::cout << "frame " << frame.index << ": " << frame.image.cols
+                  << "x" << frame.image.rows << " channels="
+                  << frame.image.channels() << " timestamp_ms="
+                  << timestamp_ms << "\n";
+    }
+
+    std::cout << "camera capture complete: device=" << info.device
+              << " format=" << info.actual_format
+              << " size=" << info.actual_width << "x" << info.actual_height
+              << " fps=" << info.actual_fps
+              << " frames=" << captured << " index_range="
+              << first_index << ".." << last_index << "\n";
+    return 0;
+}
+
 int runInference(const Options& options)
 {
     std::vector<std::string> input_images;
@@ -1008,6 +1208,9 @@ int main(int argc, char* argv[])
     if (options.show_version) {
         std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
         return 0;
+    }
+    if (options.capture_only) {
+        return runCapture(options);
     }
     if (options.model_path.empty()) {
         std::cout << "====================================\n";

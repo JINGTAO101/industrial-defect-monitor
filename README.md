@@ -12,7 +12,9 @@
 - **任务 4A**：可关闭的线程安全有界队列，支持阻塞生产/消费、满载等待、
   关闭排空和并发无丢失验证；
 - **任务 4B**：`--image-dir` 批量检测接入读取/推理/结果三线程，两个容量 1
-  队列形成背压；覆盖六图正常排空、受控积压、下游致命错误唤醒退出。
+  队列形成背压；覆盖六图正常排空、受控积压、下游致命错误唤醒退出；
+- **任务 5A**：V4L2 `CameraSource` 单摄像头采集，支持 YUYV/MJPG 转 BGR、
+  序号/时间戳、读取超时和 `--capture-only --max-frames`；真实 USB 直通待实机。
 
 SQLite、MQTT 不在当前阶段范围内。
 
@@ -108,6 +110,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   --queue-capacity 1 --conf 0.25 --iou 0.45 \
   --json-out build/verification/batch.json
 
+# V4L2 采集成（无需模型）
+./build/bin/edge_ai \
+  --camera /dev/video0 --capture-only --max-frames 30 \
+  --camera-format YUYV --camera-width 640 --camera-height 480 --camera-fps 30
+
 # 非法参数：stderr 报错，退出码 2
 ./build/bin/edge_ai --bogus
 ```
@@ -135,10 +142,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 37 个测试（单元测试 + CLI 失败路径 + 空检测 +
-路径冲突 + 批量输入 + 队列 + 三线程流水线）；提供 `EDGE_AI_MODEL_PATH`、
-`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照、对照
-守卫和线程化批量对照测试，共 40 个。本次验证 40/40 通过。
+不提供真实模型路径时运行 42 个测试（单元测试 + CLI 失败路径 + 空检测 +
+路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时）；提供
+`EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外
+运行六图对照、对照守卫和线程化批量对照测试，共 45 个。本次验证 45/45 通过。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -179,6 +186,14 @@ ctest --test-dir build --output-on-failure
 - `threaded_batch_reference`：六图真实模型批量顺序/检测结果与参考对照（可选）。
 - `--queue-capacity=-1` 与超出 `size_t` 的容量值会在 CLI 解析阶段返回 2。
 
+任务 5A 新增 5 个不需要摄像头的测试：
+
+- `camera_missing_device`：设备不存在时明确报错；
+- `camera_timeout`：注入超时 backend，验证 `next()` 返回 timeout；
+- `camera_invalid_options`：不支持的像素格式被拒绝；
+- `camera_frame_conversion`：2×2 YUYV 注入帧转 BGR、序号和时间戳；
+- `cli_camera`：无设备、缺少参数/非法帧数/格式/尺寸及错误组合。
+
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
 指向模型、图片或彼此（含相对路径/悬空符号链接/硬链接）时被拒绝，且原文件
@@ -196,6 +211,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 ├── include/
 │   ├── batch_processor.hpp
 │   ├── bounded_queue.hpp
+│   ├── camera_source.hpp
 │   ├── image_preprocess.hpp
 │   ├── image_source.hpp
 │   ├── model_contract.hpp
@@ -207,6 +223,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   └── threaded_pipeline.hpp
 ├── src/
 │   ├── batch_processor.cpp
+│   ├── camera_source.cpp
 │   ├── image_preprocess.cpp
 │   ├── image_source.cpp
 │   ├── main.cpp
@@ -224,6 +241,8 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── input-and-quality.md           # 任务 3 输入抽象与 OK/NG 判定
 │   ├── bounded-queue.md               # 任务 4A 队列语义与满载/并发指标
 │   ├── threaded-pipeline.md           # 任务 4B 三线程流水线与故障/积压记录
+│   ├── v4l2-camera.md                 # 任务 5A V4L2 采集与虚拟设备证据
+│   ├── v4l2-capture-run.txt           # vivid 30 帧采集日志
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -240,6 +259,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_empty_detections.cmake
     ├── cli_path_conflict_tests.cmake
     ├── cli_batch_tests.cmake
+    ├── cli_camera_tests.cmake
     ├── compare_reference_guard_tests.cmake
     ├── queue_tests.cpp
     ├── threaded_pipeline_tests.cpp
@@ -315,6 +335,21 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
 测试中两个队列最大深度均为 1；下游回调致命失败会关闭队列、唤醒并 join 全部
 线程后返回非零。
 
+## 任务 5A：V4L2 摄像头采集
+
+详细设备信息、请求/实际格式、错误分类和 30 帧日志见
+[docs/v4l2-camera.md](docs/v4l2-camera.md)。
+
+- `CameraSource` 通过 V4L2 MMAP 连续采集，支持 YUYV/MJPG 转 BGR；返回前复制
+  数据并交还驱动缓冲区，`Frame` 可独立使用。
+- `--capture-only --max-frames N` 不需要模型；设备不存在、占用、格式/帧率
+  不支持、读取超时都有可区分错误并以非零退出。
+- 30 帧采集使用 vivid 虚拟设备验证：`/dev/video0`、YUYV 640x480 @30，
+  序号 0..29，退出码 0。
+- **AT-009 真实 USB 摄像头直通待实机验证**：当前 `lsusb` 无摄像头，VMware
+  未直通；vivid 日志仅用于实现验证。
+- 自动测试 5 个，均不依赖摄像头；完整套件 45/45，通过。
+
 ## 验收记录（2B/3）
 
 ```text
@@ -330,7 +365,7 @@ $ cmake --build build
 
 $ ctest --test-dir build --output-on-failure
 ...
-100% tests passed, 0 tests failed out of 40
+100% tests passed, 0 tests failed out of 45
 
 $ ./build/bin/edge_ai --model ... --image .../crazing_101.jpg \
     --conf 0.25 --iou 0.45

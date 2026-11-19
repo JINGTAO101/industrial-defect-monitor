@@ -1,0 +1,85 @@
+# V4L2 capture verification log (virtual vivid device)
+# Date: 2026-11-19
+# Host: Ubuntu 24.04.5 LTS, x86_64
+# NOTE: No USB camera is passed through to this VMware VM; this log is
+#       implementation verification against the kernel vivid virtual driver.
+#       AT-009 real-camera acceptance remains pending.
+
+$ lsusb
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0001 Linux Foundation 1.1 root hub
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 003 Device 002: ID 0e0f:0003 VMware, Inc. Virtual Mouse
+Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+
+$ v4l2-ctl --list-devices
+vivid (platform:vivid-000):
+	/dev/video0
+	/dev/video1
+	/dev/video2
+	/dev/video3
+	/dev/radio0
+	/dev/radio1
+	/dev/vbi0
+	/dev/vbi1
+	/dev/swradio0
+	/dev/v4l-touch0
+	/dev/media0
+
+
+$ v4l2-ctl -d /dev/video0 --set-fmt-video=width=640,height=480,pixelformat=YUYV --set-parm=30
+Frame rate set to 30.000 fps
+
+$ v4l2-ctl -d /dev/video0 --get-fmt-video --get-parm
+Format Video Capture:
+	Width/Height      : 640/480
+	Pixel Format      : 'YUYV' (YUYV 4:2:2)
+	Field             : None
+	Bytes per Line    : 1280
+	Size Image        : 614400
+	Colorspace        : sRGB
+	Transfer Function : Default (maps to sRGB)
+	YCbCr/HSV Encoding: Default (maps to ITU-R 601)
+	Quantization      : Default (maps to Limited Range)
+	Flags             :
+Streaming Parameters Video Capture:
+	Capabilities     : timeperframe
+	Frames per second: 30.000 (30/1)
+	Read buffers     : 1
+
+$ ./build/bin/edge_ai --camera /dev/video0 --capture-only --max-frames 30 --camera-format YUYV --camera-width 640 --camera-height 480 --camera-fps 30
+camera: /dev/video0
+requested: YUYV 640x480 @ 30 fps timeout=2000 ms
+actual: YUYV 640x480 @ 30.000 fps bytes_per_line=1280
+frame 0: 640x480 channels=3 timestamp_ms=1795062803580
+frame 1: 640x480 channels=3 timestamp_ms=1795062803608
+frame 2: 640x480 channels=3 timestamp_ms=1795062803643
+frame 3: 640x480 channels=3 timestamp_ms=1795062803676
+frame 4: 640x480 channels=3 timestamp_ms=1795062803709
+frame 5: 640x480 channels=3 timestamp_ms=1795062803743
+frame 6: 640x480 channels=3 timestamp_ms=1795062803776
+frame 7: 640x480 channels=3 timestamp_ms=1795062803809
+frame 8: 640x480 channels=3 timestamp_ms=1795062803843
+frame 9: 640x480 channels=3 timestamp_ms=1795062803876
+frame 10: 640x480 channels=3 timestamp_ms=1795062803909
+frame 11: 640x480 channels=3 timestamp_ms=1795062803942
+frame 12: 640x480 channels=3 timestamp_ms=1795062803976
+frame 13: 640x480 channels=3 timestamp_ms=1795062804009
+frame 14: 640x480 channels=3 timestamp_ms=1795062804044
+frame 15: 640x480 channels=3 timestamp_ms=1795062804076
+frame 16: 640x480 channels=3 timestamp_ms=1795062804109
+frame 17: 640x480 channels=3 timestamp_ms=1795062804143
+frame 18: 640x480 channels=3 timestamp_ms=1795062804176
+frame 19: 640x480 channels=3 timestamp_ms=1795062804209
+frame 20: 640x480 channels=3 timestamp_ms=1795062804243
+frame 21: 640x480 channels=3 timestamp_ms=1795062804276
+frame 22: 640x480 channels=3 timestamp_ms=1795062804309
+frame 23: 640x480 channels=3 timestamp_ms=1795062804343
+frame 24: 640x480 channels=3 timestamp_ms=1795062804376
+frame 25: 640x480 channels=3 timestamp_ms=1795062804408
+frame 26: 640x480 channels=3 timestamp_ms=1795062804443
+frame 27: 640x480 channels=3 timestamp_ms=1795062804476
+frame 28: 640x480 channels=3 timestamp_ms=1795062804509
+frame 29: 640x480 channels=3 timestamp_ms=1795062804543
+camera capture complete: device=/dev/video0 format=YUYV size=640x480 fps=30 frames=30 index_range=0..29
+# exit code: 0

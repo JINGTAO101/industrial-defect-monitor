@@ -82,6 +82,7 @@ add_library(edge_ai_core STATIC
     src/postprocess.cpp
     src/quality.cpp
     src/image_source.cpp
+    src/camera_source.cpp
 )
 target_include_directories(edge_ai_core
     PUBLIC
@@ -213,7 +214,11 @@ if(BUILD_TESTING)
             quality_boundary
             quality_invalid_threshold
             image_source_single
-            image_source_directory)
+            image_source_directory
+            camera_missing_device
+            camera_timeout
+            camera_invalid_options
+            camera_frame_conversion)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})
     endforeach()
 
@@ -263,6 +268,14 @@ if(BUILD_TESTING)
             -DREAL_IMAGE_DIR=${EDGE_AI_TEST_IMAGES_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_tests.cmake
     )
+
+    add_test(
+        NAME cli_camera
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_camera_tests.cmake
+    )
+    set_tests_properties(cli_camera PROPERTIES TIMEOUT 10)
 
     if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)
         add_test(

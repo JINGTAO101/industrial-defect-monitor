@@ -12,6 +12,7 @@
 #include <opencv2/core.hpp>
 
 #include "image_preprocess.hpp"
+#include "camera_source.hpp"
 #include "image_source.hpp"
 #include "model_contract.hpp"
 #include "postprocess.hpp"
@@ -639,6 +640,154 @@ bool testImageSourceDirectory(std::string& error)
                   error);
 }
 
+class FakeTimeoutCameraBackend final : public edge_ai::CameraBackend {
+public:
+    FakeTimeoutCameraBackend()
+    {
+        info_.device = "/dev/fake";
+        info_.actual_format = "YUYV";
+        info_.actual_width = 640;
+        info_.actual_height = 480;
+        info_.actual_fps = 30.0;
+        info_.bytes_per_line = 1280;
+    }
+
+    bool nextFrame(std::vector<std::uint8_t>&, std::string& error) override
+    {
+        error = "camera read timeout after 100 ms";
+        return false;
+    }
+
+    const edge_ai::CameraInfo& info() const override { return info_; }
+    void close() noexcept override {}
+
+private:
+    edge_ai::CameraInfo info_;
+};
+
+class FakeYuyvCameraBackend final : public edge_ai::CameraBackend {
+public:
+    FakeYuyvCameraBackend()
+    {
+        info_.device = "/dev/fake-yuyv";
+        info_.actual_format = "YUYV";
+        info_.actual_width = 2;
+        info_.actual_height = 2;
+        info_.actual_fps = 30.0;
+        info_.bytes_per_line = 4;
+    }
+
+    bool nextFrame(std::vector<std::uint8_t>& payload,
+                   std::string& error) override
+    {
+        if (delivered_ >= 2) {
+            error = "fake camera ended";
+            return false;
+        }
+        payload = {0, 128, 255, 128, 0, 128, 255, 128};
+        ++delivered_;
+        return true;
+    }
+
+    const edge_ai::CameraInfo& info() const override { return info_; }
+    void close() noexcept override {}
+
+private:
+    edge_ai::CameraInfo info_;
+    int delivered_ = 0;
+};
+
+bool testCameraMissingDevice(std::string& error)
+{
+    edge_ai::CameraOptions options;
+    options.device = "/dev/edge_ai_missing_camera";
+    options.format = "YUYV";
+    std::string source_error;
+    edge_ai::CameraSource source(options, source_error);
+    return expect(!source_error.empty() &&
+                      source_error.find("not found") != std::string::npos,
+                  "missing camera device was not diagnosed: " + source_error,
+                  error);
+}
+
+bool testCameraTimeout(std::string& error)
+{
+    edge_ai::CameraOptions options;
+    options.device = "/dev/fake";
+    options.format = "YUYV";
+    options.width = 640;
+    options.height = 480;
+    options.fps = 30;
+    options.timeout_ms = 100;
+    std::string source_error;
+    edge_ai::CameraSource source(
+        options, std::make_unique<FakeTimeoutCameraBackend>(), source_error);
+    if (!expect(source_error.empty(),
+                "fake timeout camera was rejected: " + source_error, error)) {
+        return false;
+    }
+    edge_ai::Frame frame;
+    const edge_ai::SourceStatus status = source.next(frame, source_error);
+    return expect(status == edge_ai::SourceStatus::Error,
+                  "timeout did not return Error", error) &&
+           expect(source_error.find("timeout") != std::string::npos,
+                  "timeout error is not diagnostic: " + source_error, error);
+}
+
+bool testCameraInvalidOptions(std::string& error)
+{
+    edge_ai::CameraOptions options;
+    options.device = "/dev/fake";
+    options.format = "RGB24";
+    std::string source_error;
+    edge_ai::CameraSource source(
+        options, std::make_unique<FakeTimeoutCameraBackend>(), source_error);
+    return expect(!source_error.empty() &&
+                      source_error.find("unsupported camera pixel format") !=
+                          std::string::npos,
+                  "unsupported camera format was not rejected: " +
+                      source_error,
+                  error);
+}
+
+bool testCameraFrameConversion(std::string& error)
+{
+    edge_ai::CameraOptions options;
+    options.device = "/dev/fake-yuyv";
+    options.format = "YUYV";
+    options.width = 2;
+    options.height = 2;
+    options.fps = 30;
+    options.timeout_ms = 100;
+    std::string source_error;
+    edge_ai::CameraSource source(
+        options, std::make_unique<FakeYuyvCameraBackend>(), source_error);
+    if (!expect(source_error.empty(),
+                "fake YUYV camera was rejected: " + source_error, error)) {
+        return false;
+    }
+
+    edge_ai::Frame first;
+    if (!expect(source.next(first, source_error) ==
+                    edge_ai::SourceStatus::Frame,
+                "first fake camera frame failed: " + source_error, error) ||
+        !expect(first.index == 0, "first camera frame index is not 0", error) ||
+        !expect(first.image.cols == 2 && first.image.rows == 2 &&
+                    first.image.type() == CV_8UC3,
+                "YUYV did not convert to 2x2 BGR", error) ||
+        !expect(first.timestamp != edge_ai::FrameTimestamp{},
+                "camera frame has no timestamp", error)) {
+        return false;
+    }
+
+    edge_ai::Frame second;
+    return expect(source.next(second, source_error) ==
+                      edge_ai::SourceStatus::Frame,
+                  "second fake camera frame failed: " + source_error, error) &&
+           expect(second.index == 1, "second camera frame index is not 1",
+                  error);
+}
+
 bool testClassMetadataParser(std::string& error)
 {
     std::map<int, std::string> names;
@@ -691,6 +840,10 @@ int main(int argc, char* argv[])
         {"quality_invalid_threshold", testQualityInvalidThreshold},
         {"image_source_single", testImageSourceSingle},
         {"image_source_directory", testImageSourceDirectory},
+        {"camera_missing_device", testCameraMissingDevice},
+        {"camera_timeout", testCameraTimeout},
+        {"camera_invalid_options", testCameraInvalidOptions},
+        {"camera_frame_conversion", testCameraFrameConversion},
     };
 
     std::string filter;
