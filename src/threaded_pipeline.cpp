@@ -68,6 +68,12 @@ bool ThreadedPipeline::run(
         result_queue.setProducerWakeCallback(
             pipeline_options_.result_producer_wake_hook);
     }
+    if (pipeline_options_.input_depth_hook) {
+        input_queue.setDepthCallback(pipeline_options_.input_depth_hook);
+    }
+    if (pipeline_options_.result_depth_hook) {
+        result_queue.setDepthCallback(pipeline_options_.result_depth_hook);
+    }
 
     std::atomic<bool> stop{false};
     std::mutex fatal_mutex;

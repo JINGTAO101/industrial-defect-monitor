@@ -81,8 +81,9 @@ max_conf_diff=1.192e-06 max_bbox_diff=3.436e-05
 ### 场景 2：容量 1 受控积压
 
 `threaded_full_backpressure` 使用两个容量 1 队列。结果回调在收到第一条结果
-后暂停；测试通过队列的进入/退出等待钩子跟踪实时状态，确认两个生产者
-**当前同时**处于等待（不是依赖可能已失效的首次等待信号），再放行回调：
+后暂停；测试通过队列的进入/退出等待钩子和实时深度确认**两个队列当前都满、
+两个生产者当前都在等待**，再放行回调；只有旧等待标志但队列已腾出位置时
+门槛不会打开：
 
 ```text
 backpressure: threads(reader=..., inference=..., result=...)
@@ -123,9 +124,10 @@ ctest --test-dir build --output-on-failure
 | `threaded_fatal_wakes` | 等两个生产者都进入等待后注入下游失败，验证唤醒、join、错误返回 |
 | `threaded_start_failure_inference` | 第 2 个线程启动失败：关闭队列、join reader、返回错误 |
 | `threaded_start_failure_result` | 第 3 个线程启动失败：关闭队列、join reader/inference、返回错误 |
+| `threaded_wait_gate_stale_flag` | 队列腾出位置但旧等待标志未清除时门槛不通过 |
 | `threaded_batch_reference` | 六图真实模型批量顺序/检测结果与参考一致（可选） |
 
-本次配置总计 39/39 通过；不提供真实模型/六图时 36 个测试通过。
+本次配置总计 40/40 通过；不提供真实模型/六图时 37 个测试通过。
 
 ## 5. 限制
 

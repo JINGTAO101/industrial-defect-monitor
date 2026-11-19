@@ -62,6 +62,13 @@ public:
         producer_wake_callback_ = std::move(callback);
     }
 
+    // Invoked with the current depth after every successful push/pop.
+    void setDepthCallback(std::function<void(std::size_t)> callback)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        depth_callback_ = std::move(callback);
+    }
+
     // As above, but for consumers about to block on an empty queue.
     void setConsumerWaitCallback(std::function<void()> callback)
     {
@@ -98,6 +105,9 @@ public:
         if (queue_.size() > stats_.max_depth) {
             stats_.max_depth = queue_.size();
         }
+        if (depth_callback_) {
+            depth_callback_(queue_.size());
+        }
         not_empty_.notify_one();
         return true;
     }
@@ -126,6 +136,9 @@ public:
         value = std::move(queue_.front());
         queue_.pop_front();
         ++stats_.dequeued;
+        if (depth_callback_) {
+            depth_callback_(queue_.size());
+        }
         not_full_.notify_one();
         return PopStatus::Item;
     }
@@ -176,6 +189,7 @@ private:
     std::function<void()> producer_wait_callback_;
     std::function<void()> producer_wake_callback_;
     std::function<void()> consumer_wait_callback_;
+    std::function<void(std::size_t)> depth_callback_;
 };
 
 }  // namespace edge_ai

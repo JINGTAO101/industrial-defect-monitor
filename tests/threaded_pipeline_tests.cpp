@@ -64,53 +64,99 @@ private:
     int next_ = 0;
 };
 
+bool wait_gate_ready(
+    std::size_t input_depth,
+    bool input_waiting,
+    std::size_t result_depth,
+    bool result_waiting,
+    std::size_t capacity)
+{
+    // Both queues must be full AND both producers must currently be blocked.
+    // A stale wait flag with an available slot must not open the gate.
+    return input_depth == capacity && input_waiting &&
+           result_depth == capacity && result_waiting;
+}
+
 struct ProducerWaitState {
     std::mutex mutex;
     std::condition_variable condition;
+    std::size_t capacity = 1;
+    std::size_t input_depth = 0;
+    std::size_t result_depth = 0;
     bool input_waiting = false;
     bool result_waiting = false;
 
+    void set_input_depth(std::size_t depth)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        input_depth = depth;
+        condition.notify_all();
+    }
+
+    void set_result_depth(std::size_t depth)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        result_depth = depth;
+        condition.notify_all();
+    }
+
+    void set_input_waiting(bool waiting)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        input_waiting = waiting;
+        condition.notify_all();
+    }
+
+    void set_result_waiting(bool waiting)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        result_waiting = waiting;
+        condition.notify_all();
+    }
+
     std::function<void()> input_start()
     {
-        return [this] {
-            std::lock_guard<std::mutex> lock(mutex);
-            input_waiting = true;
-            condition.notify_all();
-        };
+        return [this] { set_input_waiting(true); };
     }
 
     std::function<void()> input_end()
     {
-        return [this] {
-            std::lock_guard<std::mutex> lock(mutex);
-            input_waiting = false;
-            condition.notify_all();
-        };
+        return [this] { set_input_waiting(false); };
     }
 
     std::function<void()> result_start()
     {
-        return [this] {
-            std::lock_guard<std::mutex> lock(mutex);
-            result_waiting = true;
-            condition.notify_all();
-        };
+        return [this] { set_result_waiting(true); };
     }
 
     std::function<void()> result_end()
     {
-        return [this] {
-            std::lock_guard<std::mutex> lock(mutex);
-            result_waiting = false;
-            condition.notify_all();
-        };
+        return [this] { set_result_waiting(false); };
+    }
+
+    std::function<void(std::size_t)> input_depth_hook()
+    {
+        return [this](std::size_t depth) { set_input_depth(depth); };
+    }
+
+    std::function<void(std::size_t)> result_depth_hook()
+    {
+        return [this](std::size_t depth) { set_result_depth(depth); };
+    }
+
+    bool ready()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return wait_gate_ready(input_depth, input_waiting, result_depth,
+                               result_waiting, capacity);
     }
 
     bool wait_both(std::chrono::milliseconds timeout)
     {
         std::unique_lock<std::mutex> lock(mutex);
         return condition.wait_for(lock, timeout, [this] {
-            return input_waiting && result_waiting;
+            return wait_gate_ready(input_depth, input_waiting, result_depth,
+                                   result_waiting, capacity);
         });
     }
 };
@@ -205,6 +251,7 @@ bool testFullBackpressure(std::string& error)
 
     SequenceSource source(5);
     ProducerWaitState wait_state;
+    wait_state.capacity = 1;
     edge_ai::PipelineOptions pipeline_options;
     pipeline_options.input_queue_capacity = 1;
     pipeline_options.result_queue_capacity = 1;
@@ -212,6 +259,8 @@ bool testFullBackpressure(std::string& error)
     pipeline_options.input_producer_wake_hook = wait_state.input_end();
     pipeline_options.result_producer_wait_hook = wait_state.result_start();
     pipeline_options.result_producer_wake_hook = wait_state.result_end();
+    pipeline_options.input_depth_hook = wait_state.input_depth_hook();
+    pipeline_options.result_depth_hook = wait_state.result_depth_hook();
     edge_ai::ThreadedPipeline pipeline(
         source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
 
@@ -308,6 +357,7 @@ bool testFatalWakesWaiters(std::string& error)
 
     SequenceSource source(10);
     ProducerWaitState wait_state;
+    wait_state.capacity = 1;
     edge_ai::PipelineOptions pipeline_options;
     pipeline_options.input_queue_capacity = 1;
     pipeline_options.result_queue_capacity = 1;
@@ -315,6 +365,8 @@ bool testFatalWakesWaiters(std::string& error)
     pipeline_options.input_producer_wake_hook = wait_state.input_end();
     pipeline_options.result_producer_wait_hook = wait_state.result_start();
     pipeline_options.result_producer_wake_hook = wait_state.result_end();
+    pipeline_options.input_depth_hook = wait_state.input_depth_hook();
+    pipeline_options.result_depth_hook = wait_state.result_depth_hook();
     edge_ai::ThreadedPipeline pipeline(
         source, *runner, edge_ai::PostprocessOptions{}, pipeline_options);
 
@@ -446,6 +498,27 @@ bool testStartFailureResult(std::string& error)
     return runStartFailure(edge_ai::PipelineStage::Result, "result", error);
 }
 
+bool testWaitGateRejectsStaleFlag(std::string& error)
+{
+    ProducerWaitState state;
+    state.capacity = 1;
+    // Input queue has space, but the old wait flag has not been cleared yet.
+    state.set_input_depth(0);
+    state.set_input_waiting(true);
+    state.set_result_depth(1);
+    state.set_result_waiting(true);
+    if (!expect(!state.ready(),
+                "wait gate opened with an available input slot", error)) {
+        return false;
+    }
+
+    // Only when both queues are full and both producers wait may the gate open.
+    state.set_input_depth(1);
+    return expect(state.ready(),
+                  "wait gate did not open with both queues full and waiting",
+                  error);
+}
+
 }  // namespace
 
 int main(int argc, char* argv[])
@@ -456,6 +529,7 @@ int main(int argc, char* argv[])
         {"threaded_fatal_wakes", testFatalWakesWaiters},
         {"threaded_start_failure_inference", testStartFailureInference},
         {"threaded_start_failure_result", testStartFailureResult},
+        {"threaded_wait_gate_stale_flag", testWaitGateRejectsStaleFlag},
     };
 
     const std::string filter = argc > 1 ? argv[1] : "";
