@@ -101,8 +101,8 @@ $ ./build/bin/edge_ai_threaded_tests threaded_preview_image_included
 # ---- Full suite ----
 
 $ ctest --test-dir build --output-on-failure
-100% tests passed, 0 tests failed out of 71
-# 68 tests run without external model/images.
+100% tests passed, 0 tests failed out of 73
+# 70 tests run without external model/images.
 
 # ---- Review-fix round: main-thread pump, display probe, label layout ----
 # This round had no /dev/video* node, so camera preview was not rerun.
@@ -146,5 +146,22 @@ quality: NG (confidence>0.25, qualifying=2/2)
 # timeout 124: highgui still waiting for key/close; no abort.
 
 $ ctest --test-dir build -R cli_annotation --output-on-failure
-1/1 Test #68: cli_annotation ... Passed
+1/1 Test #70: cli_annotation ... Passed
 100% tests passed, 0 tests failed out of 1
+
+# ---- Second review round: final-frame drain, label-vs-label, offscreen probe ----
+
+$ ./build/bin/edge_ai_tests preview_drains_final_frame
+[PASS] preview_drains_final_frame   # --max-frames 1 still shows its last frame
+$ ./build/bin/edge_ai_tests annotation_labels_do_not_overlap
+[PASS] annotation_labels_do_not_overlap
+
+$ timeout -s INT -k 2s 1s env -u DISPLAY -u WAYLAND_DISPLAY \
+    QT_QPA_PLATFORM=offscreen ./build/bin/edge_ai \
+    --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png --display
+# exit 124 (window still open) -> offscreen still passes the probe
+
+$ ctest --test-dir build --output-on-failure
+100% tests passed, 0 tests failed out of 73
+# 70 tests run without external model/images.

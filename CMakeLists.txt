@@ -239,10 +239,12 @@ if(BUILD_TESTING)
             annotation_ng_boxes
             annotation_error_frame
             annotation_label_avoids_banner
+            annotation_labels_do_not_overlap
             annotation_label_right_edge
             annotation_save_png
             preview_drops_frames
             preview_close_stops
+            preview_drains_final_frame
             preview_closed_without_frames
             preview_error_stops)
         add_test(NAME unit_${test_name} COMMAND edge_ai_tests ${test_name})

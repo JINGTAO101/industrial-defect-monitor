@@ -72,6 +72,10 @@ public:
     bool start(std::string& error);
     void submit(cv::Mat image, AnnotationInput input);
     void pump();
+    // Pumps the newest pending frame after the pipeline has finished, unless
+    // the user already closed the window. This prevents a short run
+    // (--max-frames 1) from exiting without ever displaying its result.
+    void drain();
     void close();
 
     PreviewStats stats() const;

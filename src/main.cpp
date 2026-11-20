@@ -54,23 +54,24 @@ void handleSigint(int)
 // Qt's highgui calls abort() when it cannot load a platform plugin or
 // connect to DISPLAY (for example DISPLAY=:9999 over SSH). Probe in a child
 // process so that failure becomes a readable error instead of killing the
-// detector. offscreen is an explicit opt-in and needs no probe.
+// detector. offscreen only skips the DISPLAY environment check; it still goes
+// through the child probe so a missing libqoffscreen plugin is caught.
 bool validateDisplayBackend(std::string& error)
 {
     const char* platform = std::getenv("QT_QPA_PLATFORM");
-    if (platform != nullptr && std::string(platform) == "offscreen") {
-        return true;
-    }
-
-    const char* display = std::getenv("DISPLAY");
-    const char* wayland = std::getenv("WAYLAND_DISPLAY");
-    const bool has_display = display != nullptr && display[0] != '\0';
-    const bool has_wayland = wayland != nullptr && wayland[0] != '\0';
-    if (!has_display && !has_wayland) {
-        error = "--display requires DISPLAY/WAYLAND_DISPLAY or "
-                "QT_QPA_PLATFORM=offscreen; use --save-annotated for "
-                "headless single-image output";
-        return false;
+    const bool offscreen =
+        platform != nullptr && std::string(platform) == "offscreen";
+    if (!offscreen) {
+        const char* display = std::getenv("DISPLAY");
+        const char* wayland = std::getenv("WAYLAND_DISPLAY");
+        const bool has_display = display != nullptr && display[0] != '\0';
+        const bool has_wayland = wayland != nullptr && wayland[0] != '\0';
+        if (!has_display && !has_wayland) {
+            error = "--display requires DISPLAY/WAYLAND_DISPLAY or "
+                    "QT_QPA_PLATFORM=offscreen; use --save-annotated for "
+                    "headless single-image output";
+            return false;
+        }
     }
 
     const pid_t child = ::fork();
@@ -1590,6 +1591,10 @@ int runCameraInference(const Options& options)
             std::this_thread::sleep_for(std::chrono::milliseconds(15));
         }
         pipeline_thread.join();
+        // The pipeline may finish between two pump iterations. Show its last
+        // pending frame before closing; if the user already closed the
+        // window, drain() is a no-op.
+        preview->drain();
         preview->close();
         preview_stats = preview->stats();
     } else {

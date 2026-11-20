@@ -190,20 +190,49 @@ AnnotationLayout computeAnnotationLayout(
         placements.push_back(
             candidate(box.x, layout.status.y + layout.status.height + 2));
 
+        const auto conflicts = [&](const cv::Rect& placement) {
+            if (overlaps(placement, layout.status)) {
+                return true;
+            }
+            for (const cv::Rect& placed : layout.labels) {
+                if (overlaps(placement, placed)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
         cv::Rect chosen;
         bool found = false;
         for (const cv::Rect& placement : placements) {
             if (placement.y >= 0 &&
                 placement.y + placement.height <= image_size.height &&
-                !overlaps(placement, layout.status)) {
+                !conflicts(placement)) {
                 chosen = placement;
                 found = true;
                 break;
             }
         }
         if (!found) {
-            // Dense/tiny images: keep the label inside the image and below
-            // the banner even if it must overlap content.
+            // Scan downward for a free slot when every preferred position is
+            // taken by the banner or an earlier label.
+            const int start = std::max(
+                0, layout.status.y + layout.status.height + 2);
+            for (int top = start;
+                 top + geometry.height <= image_size.height; top += 4) {
+                const cv::Rect candidate_rect = clampedLabel(
+                    cv::Rect(box.x, top, geometry.width, geometry.height),
+                    image_size.width);
+                if (!conflicts(candidate_rect)) {
+                    chosen = candidate_rect;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            // Dense images: keep the label inside the image even if it must
+            // overlap; this is a last resort.
             const int top = std::min(
                 std::max(0, layout.status.y + layout.status.height + 2),
                 std::max(0, image_size.height - geometry.height));

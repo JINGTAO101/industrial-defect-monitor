@@ -1464,6 +1464,35 @@ bool testAnnotationLabelAvoidsBanner(std::string& error)
                   "top-left label is outside the image", error);
 }
 
+bool testAnnotationLabelsDoNotOverlap(std::string& error)
+{
+    edge_ai::AnnotationInput input;
+    input.quality_available = true;
+    input.is_ng = true;
+    // Two nearby, non-intersecting boxes whose labels would collide if the
+    // layout only avoided the banner.
+    input.detections.push_back({0, "crazing", 0.81f, 10.0f, 20.0f,
+                                140.0f, 60.0f});
+    input.detections.push_back({5, "scratches", 0.72f, 16.0f, 26.0f,
+                                150.0f, 66.0f});
+    const edge_ai::AnnotationLayout layout = edge_ai::computeAnnotationLayout(
+        cv::Size(320, 200), input);
+    if (!expect(layout.labels.size() == 2,
+                "overlap layout did not produce two labels", error)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < layout.labels.size(); ++i) {
+        for (std::size_t j = i + 1; j < layout.labels.size(); ++j) {
+            if (!expect((layout.labels[i] & layout.labels[j]).area() == 0,
+                        "adjacent detection labels overlap each other",
+                        error)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool testAnnotationLabelRightEdge(std::string& error)
 {
     edge_ai::AnnotationInput input;
@@ -1579,6 +1608,33 @@ bool testPreviewCloseStops(std::string& error)
                   "preview close was not recorded as a user close", error) &&
            expect(!stats.failed, "user close was recorded as a failure",
                   error);
+}
+
+bool testPreviewDrainsFinalFrame(std::string& error)
+{
+    std::atomic<bool> stop{false};
+    auto sink = std::make_unique<FakePreviewSink>(
+        0, edge_ai::PreviewStatus::Ok);
+    edge_ai::PreviewWindow preview("test", &stop, std::move(sink));
+    std::string start_error;
+    if (!expect(preview.start(start_error),
+                "final-frame preview failed to start: " + start_error,
+                error)) {
+        return false;
+    }
+    preview.submit(cv::Mat(32, 32, CV_8UC3, cv::Scalar(0, 0, 0)),
+                   edge_ai::AnnotationInput{});
+    // Simulate the pipeline finishing before the next pump iteration.
+    preview.drain();
+    const edge_ai::PreviewStats stats = preview.stats();
+    preview.close();
+    return expect(stats.submitted == 1,
+                  "final-frame preview submitted count is wrong", error) &&
+           expect(stats.shown == 1,
+                  "final-frame preview exited without showing its frame",
+                  error) &&
+           expect(stats.dropped == 0,
+                  "final-frame preview dropped its only frame", error);
 }
 
 bool testPreviewClosedWithoutFrames(std::string& error)
@@ -1864,10 +1920,12 @@ int main(int argc, char* argv[])
         {"annotation_ng_boxes", testAnnotationNgBoxes},
         {"annotation_error_frame", testAnnotationErrorFrame},
         {"annotation_label_avoids_banner", testAnnotationLabelAvoidsBanner},
+        {"annotation_labels_do_not_overlap", testAnnotationLabelsDoNotOverlap},
         {"annotation_label_right_edge", testAnnotationLabelRightEdge},
         {"annotation_save_png", testAnnotationSavePng},
         {"preview_drops_frames", testPreviewDropsFrames},
         {"preview_close_stops", testPreviewCloseStops},
+        {"preview_drains_final_frame", testPreviewDrainsFinalFrame},
         {"preview_closed_without_frames", testPreviewClosedWithoutFrames},
         {"preview_error_stops", testPreviewErrorStops},
     };

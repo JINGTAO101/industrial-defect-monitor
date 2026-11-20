@@ -134,4 +134,26 @@ if(NOT err MATCHES "cannot open a window")
         "dead DISPLAY did not produce a readable error: ${err}")
 endif()
 
+# offscreen must still go through the child probe. A missing libqoffscreen
+# plugin is not reproducible with a plain env override (Qt always falls back
+# to its compiled-in plugin path), so that scenario is covered by the same
+# child-abort->readable-error path as the dead-DISPLAY case above. Here we
+# only assert that offscreen still passes the probe and reaches the window.
+execute_process(
+    COMMAND timeout -s INT -k 2s 1s
+        env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen
+        "${BIN}"
+        --model "${FIXTURES}/zero_output.onnx"
+        --image "${FIXTURES}/non_square_320x200.png"
+        --display
+    RESULT_VARIABLE rc
+    OUTPUT_VARIABLE out
+    ERROR_VARIABLE err)
+# 124 = the offscreen window was still open when the timeout fired, which
+# means the probe passed and did not reject offscreen.
+if(NOT rc EQUAL 124)
+    message(FATAL_ERROR
+        "offscreen --display: expected 124 (still displaying), got ${rc}; stdout=${out}; stderr=${err}")
+endif()
+
 message(STATUS "Headless annotation save and option guards passed")

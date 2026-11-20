@@ -220,6 +220,19 @@ void PreviewWindow::pump()
     finish(status, error);
 }
 
+void PreviewWindow::drain()
+{
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!started_ || stopping_ || finished_ || !pending_) {
+                return;
+            }
+        }
+        pump();
+    }
+}
+
 void PreviewWindow::close()
 {
     {

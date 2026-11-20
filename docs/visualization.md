@@ -184,7 +184,7 @@ camera stopped; accepted frames drained
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **71/71 通过**；无模型/图片/摄像头时 68 个测试通过。
+本次完整套件 **73/73 通过**；无模型/图片/摄像头时 70 个测试通过。
 
 任务 5C 新增：
 
@@ -193,14 +193,16 @@ ctest --test-dir build --output-on-failure
 | `annotation_ng_boxes` | 非正方形原图、框坐标不缩放、不修改源图 |
 | `annotation_error_frame` | ERROR 帧只画状态条，不画检测框 |
 | `annotation_label_avoids_banner` | 左上角框的标签不与状态条相交 |
+| `annotation_labels_do_not_overlap` | 相邻框的标签互相避让，不互相覆盖 |
 | `annotation_label_right_edge` | 靠右边缘的标签不越出图像 |
 | `annotation_save_png` | 无 GUI 保存/回读 PNG，尺寸与框像素保持 |
 | `preview_drops_frames` | 慢速预览只保留最新帧，`dropped>0`，submit 不阻塞 |
 | `preview_close_stops` | 关闭窗口置外部停止标志，记录 user close |
+| `preview_drains_final_frame` | 流水线结束时仍先显示最后一帧（`--max-frames 1`） |
 | `preview_closed_without_frames` | 首帧后停止送帧，仍能通过 poll 检测关窗并退出 |
 | `preview_error_stops` | 显示失败置停止标志并保留诊断 |
 | `threaded_preview_image_included` | 预览开启时结果携带源图；关闭时不保留 |
-| `cli_annotation` | 无桌面保存、尺寸、路径冲突、headless 和失效 DISPLAY 守卫 |
+| `cli_annotation` | 无桌面保存、尺寸、路径冲突、headless/失效 DISPLAY/offscreen 守卫 |
 
 ## 8. 限制与待确认
 
