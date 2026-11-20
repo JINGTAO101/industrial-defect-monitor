@@ -172,4 +172,56 @@ if(NOT err MATCHES "invalid value for --from")
     message(FATAL_ERROR "invalid timestamp error is unclear: ${err}")
 endif()
 
+# 6. SQLite sidecar paths must not be usable as output paths.
+foreach(sidecar_suffix -journal -wal -shm)
+    run_edge(out err rc
+        --model "${FIXTURES}/zero_output.onnx"
+        --image "${FIXTURES}/non_square_320x200.png"
+        --db "${DB}"
+        --json-out "${DB}${sidecar_suffix}")
+    expect_rc("sidecar conflict ${sidecar_suffix}" 2 "${rc}" "${out}" "${err}")
+    if(NOT err MATCHES "SQLite sidecar")
+        message(FATAL_ERROR
+            "sidecar conflict ${sidecar_suffix} is unclear: ${err}")
+    endif()
+endforeach()
+
+# 7. In-memory databases cannot satisfy the persistence contract.
+run_edge(out err rc
+    --model "${FIXTURES}/zero_output.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --db ":memory:")
+expect_rc("in-memory database" 2 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "persistent file path")
+    message(FATAL_ERROR "in-memory database error is unclear: ${err}")
+endif()
+
+# 8. Impossible calendar dates are rejected, not normalized.
+run_edge(out err rc --query --db "${DB}" --from 2026-02-31T00:00:00Z)
+expect_rc("impossible calendar date" 2 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "invalid value for --from")
+    message(FATAL_ERROR "impossible date error is unclear: ${err}")
+endif()
+
+# 9. A failed optional export must not prevent the event from being saved.
+set(EXPORT_DB "${TEST_DIR}/export-failure.db")
+file(REMOVE "${EXPORT_DB}" "${EXPORT_DB}-journal" "${EXPORT_DB}-wal"
+    "${EXPORT_DB}-shm")
+run_edge(out err rc
+    --model "${FIXTURES}/zero_output.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --product-id "PROD-EXPORT"
+    --db "${EXPORT_DB}"
+    --save-annotated "${TEST_DIR}/annotated.unsupported")
+expect_rc("annotation export failure" 1 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "annotated image")
+    message(FATAL_ERROR "annotation export error is unclear: ${err}")
+endif()
+run_edge(out err rc --query --db "${EXPORT_DB}")
+expect_rc("query after export failure" 0 "${rc}" "${out}" "${err}")
+if(NOT out MATCHES "events: total=1" OR NOT out MATCHES "product=PROD-EXPORT")
+    message(FATAL_ERROR
+        "event was not persisted before the failed export: ${out}")
+endif()
+
 message(STATUS "SQLite storage CLI checks passed")

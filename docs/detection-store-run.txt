@@ -55,8 +55,9 @@ $ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
     --db tests/fixtures/non_square_320x200.png/events.db
 ...
 quality: OK (confidence>0.25, qualifying=0/0)
-edge_ai: event database open failed: cannot create database directory
-'tests/fixtures/non_square_320x200.png': Not a directory
+edge_ai: event database open failed for event uid '<id>':
+cannot create database directory 'tests/fixtures/non_square_320x200.png':
+Not a directory
 # exit code: 1
 
 $ ./build/bin/edge_ai --query --db build/does-not-exist.db
@@ -81,11 +82,63 @@ $ ./build/bin/edge_ai_storage_tests storage_query_filters
 # ---- CLI storage test ----
 
 $ ctest --test-dir build -R cli_storage --output-on-failure
-1/1 Test #74: cli_storage ... Passed
+1/1 Test #77: cli_storage ... Passed
 100% tests passed, 0 tests failed out of 1
+
+# ---- Review fixes ----
+
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png \
+    --db build/review.db --json-out build/review.db-journal
+edge_ai: output path 'build/review.db-journal' conflicts with SQLite sidecar file 'build/review.db-journal'
+# exit code: 2, no database created
+
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png --db :memory:
+edge_ai: --db must be a persistent file path, got ':memory:'
+# exit code: 2
+
+$ ./build/bin/edge_ai --query --db build/evidence-events.db \
+    --from 2026-02-31T00:00:00Z
+edge_ai: invalid value for --from: invalid calendar date/time in
+timestamp '2026-02-31T00:00:00Z'
+# exit code: 2
+
+$ ./build/bin/edge_ai_storage_tests storage_event_uid_unique
+[PASS] storage_event_uid_unique          # 200,000 IDs, no collisions
+$ ./build/bin/edge_ai_storage_tests storage_timestamp_parsing
+[PASS] storage_timestamp_parsing
+$ ./build/bin/edge_ai_storage_tests storage_rejects_unknown_schema_version
+[PASS] storage_rejects_unknown_schema_version
+
+# Version 999 database: write rejected before DDL/write; event count stayed 2.
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png --db build/version999.db
+edge_ai: event database open failed for event uid '<id>': unsupported
+database schema version '999' in 'build/version999.db' (supported: 1)
+# exit code: 1
+
+$ ./build/bin/edge_ai --query --db build/version999.db
+edge_ai: unsupported database schema version '999' in 'build/version999.db'
+(supported: 1)
+# exit code: 1
+
+# Optional export failure no longer drops the event:
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png --product-id EXPORT \
+    --db build/export-failure.db \
+    --save-annotated build/annotated.unsupported
+quality: OK (confidence>0.25, qualifying=0/0)
+event saved: uid=ae946ad8-1230-4dde-b525-12194078703d db=build/export-failure.db
+edge_ai: failed to write annotated image: ... could not find a writer ...
+# exit code: 1
+
+$ ./build/bin/edge_ai --query --db build/export-failure.db
+events: total=1
+event ... product=EXPORT status=OK defects=0 ...
 
 # ---- Full suite ----
 
 $ ctest --test-dir build --output-on-failure
-100% tests passed, 0 tests failed out of 77
-# 74 tests run without external model/images.
+100% tests passed, 0 tests failed out of 80
+# 77 tests run without external model/images.

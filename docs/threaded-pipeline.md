@@ -128,7 +128,7 @@ ctest --test-dir build --output-on-failure
 | `threaded_external_stop_drains` | `max_input_frames=0` 持续运行，外部停止后排空已接收项 |
 | `threaded_batch_reference` | 六图真实模型批量顺序/检测结果与参考一致（可选） |
 
-本次配置总计 77/77 通过；不提供真实模型/六图时 74 个测试通过。
+本次配置总计 80/80 通过；不提供真实模型/六图时 77 个测试通过。
 
 ## 5. 限制
 

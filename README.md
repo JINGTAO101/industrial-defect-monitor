@@ -181,11 +181,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 74 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 77 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
 重连/停止 + 标注/预览/无桌面保存 + SQLite 存储/查询）；提供
 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时
-额外运行六图对照、对照守卫和线程化批量对照测试，共 77 个。
+额外运行六图对照、对照守卫和线程化批量对照测试，共 80 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -274,8 +274,12 @@ ctest --test-dir build --output-on-failure
 - `storage_roundtrip`：事件+明细写入、唯一 ID、字段读取、关闭后重开仍存在；
 - `storage_rollback_on_defect_failure`：明细触发器失败后主记录回滚为 0 行；
 - `storage_query_filters`：状态/产品/时间范围/组合筛选，参数绑定防注入；
+- `storage_event_uid_unique`：连续 200,000 个事件 ID 无重复；
+- `storage_timestamp_parsing`：严格日历/时区校验，非法 ISO 日期被拒绝；
+- `storage_rejects_unknown_schema_version`：版本 999 的库被拒绝且事件不变；
 - `cli_storage`：OK/NG 各一条进程写入、新进程查询、时间/状态/产品筛选、
-  写库失败诊断与退出码、选项守卫。
+  写库失败诊断与退出码、sidecar 冲突、`:memory:`、非法日期、导出失败
+  仍入库、选项守卫。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
@@ -452,7 +456,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 77/77（含 5B/5C/6A 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 80/80（含 5B/5C/6A 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 
@@ -495,7 +499,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
 - 上一轮 vivid 预览 53 帧，`submitted=53 shown=47 dropped=6`，`stopped=1`
   退出码 0；本轮复验机无 `/dev/video*`，摄像头预览未重跑，断流关窗由
   `preview_closed_without_frames` 单元测试覆盖；
-- 5C 自动测试 13 个；完整套件 73/73，无外部资产 70 个。
+- 5C 自动测试 13 个；完整套件 80/80，无外部资产 77 个。
 
 ## 任务 6A：SQLite 检测事件保存与查询
 
@@ -503,16 +507,23 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
 [docs/detection-store.md](docs/detection-store.md)。
 
 - 仅单图模式且显式 `--db <path>` 时写库；目录批量和摄像头暂不写库；
+- `--db` 只接受持久化文件路径，`:memory:`/`file:` URI 返回 2；
 - `detection_events` 保存唯一 ID、时间、来源、产品 ID、OK/NG、缺陷数、
   模型 SHA256/路径和可空图片路径；`detection_defects` 保存类别、置信度和
   原图坐标；
 - 主记录和所有明细在同一个事务中提交；任一明细失败回滚整个事件；
+- 新库在事务中原子创建；已存在库的 schema 版本不是 1 时，在任何 DDL/写入
+  前拒绝；
+- 数据库的 `-journal`/`-wal`/`-shm` 旁文件也纳入输出路径冲突检查；
 - `--query --db ...` 独立查询，支持 `--from`/`--to`/`--status`/
-  `--product-id` 单独或组合筛选，全部参数绑定；
-- 写库失败在检测结果输出后报告，退出码 1，不改变 OK/NG；
+  `--product-id` 单独或组合筛选，全部参数绑定；ISO 日期严格校验，非法
+  日期返回 2；
+- 事件 ID 使用 256 位随机种子生成的 128 位 UUID；插入失败日志包含事件 ID；
+- 显式 `--db` 时先持久化事件，再做 JSON/标注/窗口等可选输出，两类失败
+  分别报告；
 - 合成样例 OK/NG 各一条，新查询进程验证持久化和筛选；明细触发器失败的
   单元测试确认主记录回滚；
-- 6A 新增 4 个测试；完整套件 77/77，无外部资产 74 个。
+- 6A 新增 7 个测试；完整套件 80/80，无外部资产 77 个。
 
 ## 验收记录（2B/3）
 

@@ -393,6 +393,17 @@ bool pathsConflict(const std::string& first, const std::string& second)
     return normalizedPath(first) == normalizedPath(second);
 }
 
+std::vector<std::string> sqliteSidecarPaths(const std::string& db_path)
+{
+    std::vector<std::string> paths;
+    if (!db_path.empty()) {
+        paths.push_back(db_path + "-journal");
+        paths.push_back(db_path + "-wal");
+        paths.push_back(db_path + "-shm");
+    }
+    return paths;
+}
+
 bool validateOutputPaths(
     const Options& options,
     const std::vector<std::string>& input_images,
@@ -431,6 +442,32 @@ bool validateOutputPaths(
         for (const std::string& input : input_images) {
             if (pathsConflict(output, input)) {
                 error = "output path '" + output +
+                        "' conflicts with input image path '" + input + "'";
+                return false;
+            }
+        }
+    }
+
+    // SQLite creates <db>-journal, <db>-wal and <db>-shm next to the database.
+    // None of the other outputs (or the model/inputs) may target those paths;
+    // otherwise SQLite can overwrite or delete them during normal operation.
+    for (const std::string& sidecar : sqliteSidecarPaths(options.db_path)) {
+        for (const std::string& output : outputs) {
+            if (pathsConflict(output, sidecar)) {
+                error = "output path '" + output +
+                        "' conflicts with SQLite sidecar file '" + sidecar +
+                        "'";
+                return false;
+            }
+        }
+        if (pathsConflict(sidecar, options.model_path)) {
+            error = "SQLite sidecar file '" + sidecar +
+                    "' conflicts with model path '" + options.model_path + "'";
+            return false;
+        }
+        for (const std::string& input : input_images) {
+            if (pathsConflict(sidecar, input)) {
+                error = "SQLite sidecar file '" + sidecar +
                         "' conflicts with input image path '" + input + "'";
                 return false;
             }
@@ -705,6 +742,14 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
     }
 
     const bool has_camera = !options.camera_path.empty();
+
+    if (!options.db_path.empty() &&
+        (options.db_path == ":memory:" ||
+         options.db_path.rfind("file:", 0) == 0)) {
+        error = "--db must be a persistent file path, got '" +
+                options.db_path + "'";
+        return false;
+    }
 
     if (options.query_mode) {
         if (options.db_path.empty()) {
@@ -1372,32 +1417,21 @@ int runSingleImage(const Options& options)
         std::cerr << "warning: " << anomaly << "\n";
     }
 
-    if (!options.json_out.empty() &&
-        !writeJsonResult(options.json_out, info, input, min_value, max_value,
-                         postprocess_options, result, quality, frame.source,
-                         frame.timestamp, error)) {
-        std::cerr << kProgram << ": " << error << "\n";
-        return 1;
-    }
-
     edge_ai::AnnotationInput annotation;
     annotation.quality_available = true;
     annotation.is_ng = quality.is_ng;
     annotation.detections = result.detections;
-    if (!produceAnnotatedSingle(options, frame.image, annotation, frame.source,
-                                error)) {
-        std::cerr << kProgram << ": " << error << "\n";
-        return 1;
-    }
 
+    bool output_failed = false;
+
+    // Persist the detection event first when --db is explicitly set. All
+    // optional exports are attempted afterwards so a failed JSON/annotation
+    // export (or a window that stays open) cannot keep a completed detection
+    // out of the database. Each failure is reported separately and the process
+    // exits 1, but the quality decision itself is never changed.
     if (!options.db_path.empty()) {
         edge_ai::DetectionStore store;
         std::string db_error;
-        if (!store.open(options.db_path, true, db_error)) {
-            std::cerr << kProgram << ": event database open failed: "
-                      << db_error << "\n";
-            return 1;
-        }
         edge_ai::DetectionEvent event;
         event.occurred_at_ms = edge_ai::toEpochMillis(frame.timestamp);
         event.source = frame.source;
@@ -1407,6 +1441,7 @@ int runSingleImage(const Options& options)
         event.model_path = info.path;
         event.image_path.clear();  // FR-013 will retain the image later
         event.confidence_threshold = options.conf_threshold;
+        event.event_uid = edge_ai::generateEventUid();
         event.defects.reserve(quality.defects.size());
         for (const edge_ai::Detection& detection : quality.defects) {
             edge_ai::DefectRecord defect;
@@ -1419,16 +1454,38 @@ int runSingleImage(const Options& options)
             defect.y2 = detection.y2;
             event.defects.push_back(defect);
         }
-        if (!store.insertEvent(event, db_error)) {
-            std::cerr << kProgram << ": event database write failed: "
-                      << db_error << "\n";
-            return 1;
+        if (!store.open(options.db_path, true, db_error)) {
+            std::cerr << kProgram << ": event database open failed for event "
+                      << "uid '" << event.event_uid << "': " << db_error
+                      << "\n";
+            output_failed = true;
+        } else if (!store.insertEvent(event, db_error)) {
+            // SRS FR-012/§10: the failure log identifies the event.
+            std::cerr << kProgram << ": event database write failed "
+                      << "for event uid '" << event.event_uid
+                      << "': " << db_error << "\n";
+            output_failed = true;
+        } else {
+            std::cout << "event saved: uid=" << event.event_uid
+                      << " db=" << options.db_path << "\n";
         }
-        std::cout << "event saved: uid=" << event.event_uid
-                  << " db=" << options.db_path << "\n";
     }
 
-    return 0;
+    if (!options.json_out.empty() &&
+        !writeJsonResult(options.json_out, info, input, min_value, max_value,
+                         postprocess_options, result, quality, frame.source,
+                         frame.timestamp, error)) {
+        std::cerr << kProgram << ": " << error << "\n";
+        output_failed = true;
+    }
+
+    if (!produceAnnotatedSingle(options, frame.image, annotation, frame.source,
+                                error)) {
+        std::cerr << kProgram << ": " << error << "\n";
+        output_failed = true;
+    }
+
+    return output_failed ? 1 : 0;
 }
 
 int runBatch(const Options& options)

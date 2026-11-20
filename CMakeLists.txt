@@ -176,7 +176,10 @@ if(BUILD_TESTING)
     foreach(storage_test
             storage_roundtrip
             storage_rollback_on_defect_failure
-            storage_query_filters)
+            storage_query_filters
+            storage_event_uid_unique
+            storage_timestamp_parsing
+            storage_rejects_unknown_schema_version)
         add_test(NAME ${storage_test} COMMAND edge_ai_storage_tests ${storage_test})
         set_tests_properties(${storage_test} PROPERTIES TIMEOUT 10)
     endforeach()

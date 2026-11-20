@@ -1,6 +1,8 @@
 #include "detection_store.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -14,9 +16,12 @@
 #include <stdexcept>
 
 #include <sqlite3.h>
+#include <unistd.h>
 
 namespace edge_ai {
 namespace {
+
+constexpr const char* kSupportedSchemaVersion = "1";
 
 constexpr const char* kSchemaSql = R"sql(
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -260,6 +265,60 @@ std::string columnText(sqlite3_stmt* stmt, int column)
     return text != nullptr ? reinterpret_cast<const char*>(text) : "";
 }
 
+// Reads schema_meta existence and version without creating anything.
+bool schemaMetaStatus(sqlite3* db,
+                      bool& exists,
+                      std::string& version,
+                      std::string& error)
+{
+    exists = false;
+    version.clear();
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db,
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'schema_meta' LIMIT 1;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        error = std::string("database schema probe failed: ") +
+                sqlite3_errmsg(db);
+        return false;
+    }
+    int rc = sqlite3_step(stmt);
+    const bool has_table = rc == SQLITE_ROW;
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        error = std::string("database schema probe failed: ") +
+                sqlite3_errmsg(db);
+        return false;
+    }
+    exists = has_table;
+    if (!has_table) {
+        return true;
+    }
+
+    stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db, "SELECT value FROM schema_meta WHERE key = 'schema_version';",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        error = std::string("database schema metadata is unreadable: ") +
+                sqlite3_errmsg(db);
+        return false;
+    }
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        const unsigned char* text = sqlite3_column_text(stmt, 0);
+        if (text != nullptr) {
+            version = reinterpret_cast<const char*>(text);
+        }
+    }
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_ROW) {
+        error = "database schema_version row is missing";
+        return false;
+    }
+    return true;
+}
+
 bool verifySchema(sqlite3* db, const std::string& path, std::string& error)
 {
     const char* checks[] = {
@@ -275,6 +334,31 @@ bool verifySchema(sqlite3* db, const std::string& path, std::string& error)
                     sqlite3_errmsg(db);
             return false;
         }
+    }
+
+    // Reject an unsupported schema version before any write can proceed.
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db, "SELECT value FROM schema_meta WHERE key = 'schema_version';",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        error = "database schema metadata is missing in '" + path + "': " +
+                sqlite3_errmsg(db);
+        return false;
+    }
+    const int rc = sqlite3_step(stmt);
+    std::string version;
+    if (rc == SQLITE_ROW) {
+        const unsigned char* text = sqlite3_column_text(stmt, 0);
+        if (text != nullptr) {
+            version = reinterpret_cast<const char*>(text);
+        }
+    }
+    sqlite3_finalize(stmt);
+    if (version != kSupportedSchemaVersion) {
+        error = "unsupported database schema version '" + version +
+                "' in '" + path + "' (supported: " +
+                kSupportedSchemaVersion + ")";
+        return false;
     }
     return true;
 }
@@ -300,6 +384,14 @@ bool DetectionStore::open(const std::string& path,
     close();
     if (path.empty()) {
         error = "database path is empty";
+        return false;
+    }
+
+    // Only persistent file databases are supported. Reject SQLite's in-memory
+    // and URI forms so a "saved" event cannot silently disappear when the
+    // process exits.
+    if (path == ":memory:" || path.rfind("file:", 0) == 0) {
+        error = "database path must be a persistent file, got '" + path + "'";
         return false;
     }
 
@@ -340,12 +432,47 @@ bool DetectionStore::open(const std::string& path,
         close();
         return false;
     }
-    if (create) {
-        if (!execSql(db, kSchemaSql, error, "database schema creation failed")) {
+    // Check the existing schema version BEFORE any DDL or write. Unknown
+    // versions must be rejected without touching the database.
+    bool meta_exists = false;
+    std::string version;
+    if (!schemaMetaStatus(db, meta_exists, version, error)) {
+        close();
+        return false;
+    }
+    if (meta_exists) {
+        if (version != kSupportedSchemaVersion) {
+            error = "unsupported database schema version '" + version +
+                    "' in '" + path + "' (supported: " +
+                    kSupportedSchemaVersion + ")";
             close();
             return false;
         }
-    } else if (!verifySchema(db, path, error)) {
+    } else {
+        if (!create) {
+            error = "database schema not found in '" + path + "'";
+            close();
+            return false;
+        }
+        bool initialized = false;
+        {
+            // Initialize a new database atomically: tables, indices and the
+            // schema_version row either all appear or none do.
+            Transaction transaction(db);
+            initialized =
+                transaction.begin(error) &&
+                execSql(db, kSchemaSql, error,
+                        "database schema creation failed") &&
+                transaction.commit(error);
+            // On any failure the Transaction destructor rolls back.
+        }
+        if (!initialized) {
+            close();
+            return false;
+        }
+    }
+    // Verify the tables and the (now known supported) version once more.
+    if (!verifySchema(db, path, error)) {
         close();
         return false;
     }
@@ -607,10 +734,29 @@ bool DetectionStore::query(const EventQuery& query,
 
 std::string generateEventUid()
 {
-    std::random_device device;
-    std::mt19937_64 generator(device());
-    std::uint64_t high = generator();
-    std::uint64_t low = generator();
+    // Seed a thread-local 64-bit generator from 256 bits of random_device
+    // entropy instead of a single 32-bit value. A single 32-bit seed can
+    // only produce 2^32 distinct sequences and was observed to collide in
+    // bulk generation. Mix in process id, a monotonic counter and a clock
+    // tick so IDs stay unique within a process even if the entropy source
+    // repeats, then form a UUID-v4-shaped 128-bit value.
+    thread_local std::mt19937_64 generator = [] {
+        std::random_device device;
+        std::array<std::uint32_t, 8> seed{};
+        for (std::uint32_t& word : seed) {
+            word = device();
+        }
+        std::seed_seq sequence(seed.begin(), seed.end());
+        return std::mt19937_64(sequence);
+    }();
+    static std::atomic<std::uint64_t> counter{0};
+    const std::uint64_t sequence =
+        counter.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t tick = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::uint64_t pid = static_cast<std::uint64_t>(::getpid());
+    std::uint64_t high = generator() ^ (tick + pid);
+    std::uint64_t low = generator() ^ sequence ^ (tick << 1);
     high = (high & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
     low = (low & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
 
@@ -649,6 +795,34 @@ std::string formatEpochMillisIso(std::int64_t epoch_ms)
     return result;
 }
 
+bool parseTwoDigits(const std::string& text,
+                    std::size_t position,
+                    int& value)
+{
+    if (position + 2 > text.size() ||
+        std::isdigit(static_cast<unsigned char>(text[position])) == 0 ||
+        std::isdigit(static_cast<unsigned char>(text[position + 1])) == 0) {
+        return false;
+    }
+    value = (text[position] - '0') * 10 + (text[position + 1] - '0');
+    return true;
+}
+
+int daysInMonth(int year, int month)
+{
+    static const int kDays[] = {31, 28, 31, 30, 31, 30,
+                                31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12) {
+        return 0;
+    }
+    if (month == 2) {
+        const bool leap =
+            (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        return leap ? 29 : 28;
+    }
+    return kDays[month - 1];
+}
+
 bool parseTimestampToEpochMillis(const std::string& text,
                                  std::int64_t& epoch_ms,
                                  std::string& error)
@@ -670,19 +844,49 @@ bool parseTimestampToEpochMillis(const std::string& text,
         // Fall through to ISO-8601 parsing.
     }
 
-    if (text.size() < 19) {
-        error = "invalid timestamp '" + text +
-                "' (use epoch milliseconds or YYYY-MM-DDTHH:MM:SSZ)";
+    // Strict YYYY-MM-DDTHH:MM:SS[.mmm][Z|+00:00|-00:00]. std::get_time()
+    // normalizes impossible calendar dates (2026-02-31 -> March), so parse
+    // and validate each field explicitly.
+    const std::string invalid =
+        "invalid timestamp '" + text +
+        "' (use epoch milliseconds or YYYY-MM-DDTHH:MM:SSZ)";
+    if (text.size() < 19 || text[4] != '-' || text[7] != '-' ||
+        text[10] != 'T' || text[13] != ':' || text[16] != ':') {
+        error = invalid;
         return false;
     }
-    std::tm tm{};
-    std::istringstream stream(text);
-    stream >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
-    if (stream.fail()) {
-        error = "invalid timestamp '" + text +
-                "' (use epoch milliseconds or YYYY-MM-DDTHH:MM:SSZ)";
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    // Parse the year as four digits without the two-digit helper.
+    if (text.size() < 19 ||
+        std::isdigit(static_cast<unsigned char>(text[0])) == 0 ||
+        std::isdigit(static_cast<unsigned char>(text[1])) == 0 ||
+        std::isdigit(static_cast<unsigned char>(text[2])) == 0 ||
+        std::isdigit(static_cast<unsigned char>(text[3])) == 0) {
+        error = invalid;
         return false;
     }
+    year = (text[0] - '0') * 1000 + (text[1] - '0') * 100 +
+           (text[2] - '0') * 10 + (text[3] - '0');
+    if (!parseTwoDigits(text, 5, month) ||
+        !parseTwoDigits(text, 8, day) ||
+        !parseTwoDigits(text, 11, hour) ||
+        !parseTwoDigits(text, 14, minute) ||
+        !parseTwoDigits(text, 17, second)) {
+        error = invalid;
+        return false;
+    }
+    if (month < 1 || month > 12 || day < 1 ||
+        day > daysInMonth(year, month) || hour > 23 || minute > 59 ||
+        second > 59) {
+        error = "invalid calendar date/time in timestamp '" + text + "'";
+        return false;
+    }
+
     std::size_t position = 19;
     int millis = 0;
     if (position < text.size() && text[position] == '.') {
@@ -712,6 +916,14 @@ bool parseTimestampToEpochMillis(const std::string& text,
             return false;
         }
     }
+
+    std::tm tm{};
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = minute;
+    tm.tm_sec = second;
     const std::time_t seconds = timegm(&tm);
     epoch_ms = static_cast<std::int64_t>(seconds) * 1000 + millis;
     return true;

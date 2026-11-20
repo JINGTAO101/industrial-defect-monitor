@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <sqlite3.h>
@@ -358,6 +359,163 @@ bool testQueryFilters(std::string& error)
                   "empty query result was not handled", error);
 }
 
+bool testEventUidUnique(std::string& error)
+{
+    std::unordered_set<std::string> seen;
+    seen.reserve(200000);
+    for (int i = 0; i < 200000; ++i) {
+        const std::string uid = edge_ai::generateEventUid();
+        if (uid.size() != 36 || uid[8] != '-' || uid[13] != '-' ||
+            uid[18] != '-' || uid[23] != '-') {
+            error = "event uid has an unexpected format: " + uid;
+            return false;
+        }
+        if (!seen.insert(uid).second) {
+            error = "event uid collision at index " + std::to_string(i) +
+                    ": " + uid;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testTimestampParsing(std::string& error)
+{
+    std::int64_t value = 0;
+    std::string parse_error;
+    if (!expect(edge_ai::parseTimestampToEpochMillis(
+                    "1763600000000", value, parse_error) &&
+                    value == 1763600000000LL,
+                "epoch millisecond input was rejected: " + parse_error,
+                error)) {
+        return false;
+    }
+    const char* valid[] = {
+        "2026-11-20T10:00:00Z",
+        "2026-11-20T10:00:00.123Z",
+        "2026-11-20T10:00:00+00:00",
+        "2024-02-29T00:00:00Z",
+        "2026-11-20T10:00:00",
+    };
+    for (const char* text : valid) {
+        if (!expect(edge_ai::parseTimestampToEpochMillis(text, value,
+                                                         parse_error),
+                    std::string("valid timestamp rejected: ") + text + ": " +
+                        parse_error,
+                    error)) {
+            return false;
+        }
+    }
+
+    const char* invalid[] = {
+        "2026-02-31T00:00:00Z",
+        "2026-02-29T00:00:00Z",
+        "2026-13-01T00:00:00Z",
+        "2026-00-10T00:00:00Z",
+        "2026-01-00T00:00:00Z",
+        "2026-01-32T00:00:00Z",
+        "2026-11-20T24:00:00Z",
+        "2026-11-20T10:60:00Z",
+        "2026-11-20T10:00:60Z",
+        "2026-11-20T10:00:00+02:00",
+        "2026-11-20T10:00:00.1234Z",
+        "2026-11-20 10:00:00Z",
+        "not-a-time",
+    };
+    for (const char* text : invalid) {
+        if (!expect(!edge_ai::parseTimestampToEpochMillis(text, value,
+                                                          parse_error),
+                    std::string("invalid timestamp accepted: ") + text,
+                    error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testUnknownSchemaVersion(std::string& error)
+{
+    TempDb database;
+    {
+        edge_ai::DetectionStore store;
+        if (!expect(store.open(database.path(), true, error),
+                    "cannot create store: " + error, error)) {
+            return false;
+        }
+        edge_ai::DetectionEvent first =
+            makeEvent(1000, "/images/one.jpg", "P1", true);
+        edge_ai::DetectionEvent second =
+            makeEvent(2000, "/images/two.jpg", "P2", false);
+        if (!expect(store.insertEvent(first, error) &&
+                        store.insertEvent(second, error),
+                    "cannot seed store: " + error, error)) {
+            return false;
+        }
+    }
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open(database.path().c_str(), &db) != SQLITE_OK) {
+        error = std::string("cannot open raw database: ") +
+                (db != nullptr ? sqlite3_errmsg(db) : "unknown");
+        if (db != nullptr) {
+            sqlite3_close(db);
+        }
+        return false;
+    }
+    char* sqlite_error = nullptr;
+    const int rc = sqlite3_exec(
+        db,
+        "UPDATE schema_meta SET value = '999' WHERE key = 'schema_version';",
+        nullptr, nullptr, &sqlite_error);
+    sqlite3_close(db);
+    if (rc != SQLITE_OK) {
+        error = std::string("cannot change schema version: ") +
+                (sqlite_error != nullptr ? sqlite_error : "unknown");
+        sqlite3_free(sqlite_error);
+        return false;
+    }
+
+    edge_ai::DetectionStore writable;
+    std::string write_open_error;
+    if (!expect(!writable.open(database.path(), true, write_open_error),
+                "unsupported schema version was accepted for writing",
+                error) ||
+        !expect(write_open_error.find("schema version") != std::string::npos &&
+                    write_open_error.find("999") != std::string::npos,
+                "unsupported version error is unclear: " + write_open_error,
+                error)) {
+        return false;
+    }
+    edge_ai::DetectionStore reader;
+    std::string read_open_error;
+    if (!expect(!reader.open(database.path(), false, read_open_error),
+                "unsupported schema version was accepted for reading", error)) {
+        return false;
+    }
+
+    // Reopen raw and verify the rejected writer did not add or modify events.
+    db = nullptr;
+    if (sqlite3_open(database.path().c_str(), &db) != SQLITE_OK) {
+        error = "cannot reopen raw database after version rejection";
+        if (db != nullptr) {
+            sqlite3_close(db);
+        }
+        return false;
+    }
+    sqlite3_stmt* stmt = nullptr;
+    int count = -1;
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM detection_events;", -1,
+                           &stmt, nullptr) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return expect(count == 2,
+                  "unsupported schema version rejected but events changed",
+                  error);
+}
+
 }  // namespace
 
 int main(int argc, char* argv[])
@@ -366,6 +524,10 @@ int main(int argc, char* argv[])
         {"storage_roundtrip", testRoundtrip},
         {"storage_rollback_on_defect_failure", testRollbackOnDefectFailure},
         {"storage_query_filters", testQueryFilters},
+        {"storage_event_uid_unique", testEventUidUnique},
+        {"storage_timestamp_parsing", testTimestampParsing},
+        {"storage_rejects_unknown_schema_version",
+         testUnknownSchemaVersion},
     };
 
     const std::string filter = argc > 1 ? argv[1] : "";

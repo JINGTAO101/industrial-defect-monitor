@@ -184,7 +184,7 @@ camera stopped; accepted frames drained
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **77/77 通过**；无模型/图片/摄像头时 74 个测试通过。
+本次完整套件 **80/80 通过**；无模型/图片/摄像头时 77 个测试通过。
 
 任务 5C 新增：
 
