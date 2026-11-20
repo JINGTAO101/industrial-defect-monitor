@@ -7,6 +7,8 @@ These files contain no third-party images or trained weights:
   - wrong_output.onnx: valid ONNX, but output shape is not [1,10,8400]
   - fixed_detection.onnx: valid contract with one known crazing detection
   - legacy_no_meta.db: old-style tables with no schema_meta version row
+  - legacy_sqlite_notes.db: user table named sqliteNotes (LIKE-prefix trap)
+  - legacy_view_only.db: database containing only a user view
   - corrupt_model.bin: deliberately invalid ONNX bytes
 
 Run: python -I tools/generate_test_fixtures.py
@@ -172,6 +174,35 @@ def make_legacy_database(path: Path) -> None:
     connection.close()
 
 
+def make_legacy_sqlite_notes_database(path: Path) -> None:
+    """User table named sqliteNotes: LIKE 'sqlite_%' would hide it.
+
+    The name has no underscore after "sqlite", so it is a legal user table,
+    but SQLite's LIKE treats "_" as a wildcard.
+    """
+    if path.exists():
+        path.unlink()
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE sqliteNotes (id INTEGER PRIMARY KEY, note TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO sqliteNotes(note) VALUES ('must-not-be-overwritten')"
+    )
+    connection.commit()
+    connection.close()
+
+
+def make_legacy_view_database(path: Path) -> None:
+    """Database containing only a user view, with no tables."""
+    if path.exists():
+        path.unlink()
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE VIEW legacy_view AS SELECT 1 AS id")
+    connection.commit()
+    connection.close()
+
+
 def main() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
     make_image()
@@ -184,6 +215,10 @@ def main() -> None:
     make_zero_output_model(FIXTURES / "zero_output.onnx")
     make_fixed_detection_model(FIXTURES / "fixed_detection.onnx")
     make_legacy_database(FIXTURES / "legacy_no_meta.db")
+    make_legacy_sqlite_notes_database(
+        FIXTURES / "legacy_sqlite_notes.db"
+    )
+    make_legacy_view_database(FIXTURES / "legacy_view_only.db")
     (FIXTURES / "corrupt_model.bin").write_bytes(b"NOT_AN_ONNX_MODEL\n")
     for path in sorted(FIXTURES.iterdir()):
         print(f"{path.name}: {path.stat().st_size} bytes")

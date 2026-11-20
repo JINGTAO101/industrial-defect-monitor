@@ -12,6 +12,8 @@ pretrained model weights.
 | `zero_output.onnx` | Valid-contract synthetic model whose output is all zeros; used to verify empty detections end to end. |
 | `fixed_detection.onnx` | Valid-contract synthetic model with one crazing detection at confidence 0.9; used for NG storage/display tests without a trained model. |
 | `legacy_no_meta.db` | SQLite database with old-style `detection_events` rows but no `schema_meta`; must be rejected without modification. |
+| `legacy_sqlite_notes.db` | User table `sqliteNotes` with no `schema_meta`; catches `LIKE 'sqlite_%'` wildcard misclassification. |
+| `legacy_view_only.db` | DB containing only a user view; must also be rejected without modification. |
 | `corrupt_model.bin` | Intentionally invalid bytes; used to test model-loading diagnostics. |
 
 Regenerate with:

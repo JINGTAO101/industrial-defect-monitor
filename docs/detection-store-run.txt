@@ -146,12 +146,18 @@ edge_ai: output path 'alias-target.db-journal' conflicts with SQLite
 sidecar file 'alias-target.db-journal'
 # exit code: 2; alias-target.db SHA256 unchanged; no journal file
 
-# Legacy database with detection_events but no schema_meta:
+# Legacy databases without schema_meta, including the LIKE-wildcard trap and
+# a view-only database. All three exit 1 with unchanged SHA256 and no journal.
 $ edge_ai --model ... --image ... --db legacy-copy.db
 edge_ai: event database open failed for event uid '<id>': unsupported
-legacy database 'legacy-copy.db': existing tables but no schema_meta;
+legacy database 'legacy-copy.db': existing schema objects but no schema_meta;
 refusing to initialize over it
-# exit code: 1; file SHA256 unchanged; no journal file
+# exit code: 1; SHA256 unchanged; no journal
+
+$ edge_ai --model ... --image ... --db reject-legacy_sqlite_notes.db
+# exit code: 1; SHA256 unchanged; no journal
+$ edge_ai --model ... --image ... --db reject-legacy_view_only.db
+# exit code: 1; SHA256 unchanged; no journal
 
 $ ./build/bin/edge_ai_storage_tests storage_rejects_legacy_database
 [PASS] storage_rejects_legacy_database

@@ -281,7 +281,8 @@ ctest --test-dir build --output-on-failure
   文件字节不变；
 - `cli_storage`：OK/NG 各一条进程写入、新进程查询、时间/状态/产品筛选、
   写库失败诊断与退出码、sidecar 冲突（含符号链接别名）、`:memory:`、
-  非法日期、导出失败仍入库、无版本旧库校验和不变、选项守卫。
+  非法日期、导出失败仍入库；普通旧表、`sqliteNotes` 表、仅视图三种无版本
+  库均退出 1、SHA256 不变、无 journal；选项守卫。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
@@ -518,8 +519,10 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   前拒绝；
 - 数据库的 `-journal`/`-wal`/`-shm` 旁文件也纳入输出路径冲突检查；
   `--db` 先解析符号链接到真实路径，再构造旁文件名并打开 SQLite；
-- 新库只在事务内确认没有任何用户表后原子初始化；有旧表但无
-  `schema_meta` 的库被拒绝且文件不变；
+- 新库只在事务内确认没有任何用户 schema 对象（表/视图/索引/触发器）后
+  原子初始化；用 `GLOB 'sqlite_*'` 按字面前缀排除内部对象，避免 `LIKE`
+  的 `_` 通配符把 `sqliteNotes` 误判为空库；有旧对象但无 `schema_meta`
+  的库被拒绝且文件不变；
 - `--query --db ...` 独立查询，支持 `--from`/`--to`/`--status`/
   `--product-id` 单独或组合筛选，全部参数绑定；ISO 日期严格校验，非法
   日期返回 2；

@@ -265,17 +265,20 @@ std::string columnText(sqlite3_stmt* stmt, int column)
     return text != nullptr ? reinterpret_cast<const char*>(text) : "";
 }
 
-// A database is initializable only when it contains no user tables. Ignore
-// SQLite's internal sqlite_* tables.
-bool databaseHasNoUserTables(sqlite3* db,
-                             bool& empty,
-                             std::string& error)
+// A database is initializable only when it contains no user schema objects
+// at all (tables, views, indexes or triggers). SQLite reserves object names
+// beginning with the literal prefix "sqlite_" for internal use. Use GLOB,
+// not LIKE: in LIKE, "_" matches any single character, so a user table named
+// sqliteNotes would be misclassified as internal.
+bool databaseHasNoUserSchemaObjects(sqlite3* db,
+                                    bool& empty,
+                                    std::string& error)
 {
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(
             db,
-            "SELECT name FROM sqlite_master WHERE type = 'table' "
-            "AND name NOT LIKE 'sqlite_%' LIMIT 1;",
+            "SELECT name, type FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' LIMIT 1;",
             -1, &stmt, nullptr) != SQLITE_OK) {
         error = std::string("database emptiness probe failed: ") +
                 sqlite3_errmsg(db);
@@ -495,12 +498,12 @@ bool DetectionStore::open(const std::string& path,
             Transaction transaction(db);
             if (transaction.begin(error)) {
                 bool empty = false;
-                if (!databaseHasNoUserTables(db, empty, error)) {
+                if (!databaseHasNoUserSchemaObjects(db, empty, error)) {
                     // error already set; destructor rolls back
                 } else if (!empty) {
                     error = "unsupported legacy database '" + path +
-                            "': existing tables but no schema_meta; refusing "
-                            "to initialize over it";
+                            "': existing schema objects but no schema_meta; "
+                            "refusing to initialize over it";
                 } else if (!execSql(db, kSchemaSql, error,
                                     "database schema creation failed")) {
                     // error already set; destructor rolls back
