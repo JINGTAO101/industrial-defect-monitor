@@ -5,6 +5,7 @@ These files contain no third-party images or trained weights:
   - non_square_320x200.png: synthetic RGB gradient with two shapes
   - wrong_input.onnx: valid ONNX, but input shape is not [1,3,640,640]
   - wrong_output.onnx: valid ONNX, but output shape is not [1,10,8400]
+  - fixed_detection.onnx: valid contract with one known crazing detection
   - corrupt_model.bin: deliberately invalid ONNX bytes
 
 Run: python -I tools/generate_test_fixtures.py
@@ -103,6 +104,56 @@ def make_zero_output_model(path: Path) -> None:
     onnx.save(model, path)
 
 
+def make_fixed_detection_model(path: Path) -> None:
+    """Create a valid-contract model with one known crazing detection.
+
+    The detection is expressed in the 640x640 letterbox space. For the
+    320x200 test image (ratio 2.0, pad_top 120) it restores to
+    bbox_xyxy=[40, 30, 160, 120] with confidence 0.9.
+    """
+    graph_input = helper.make_tensor_value_info(
+        "images", TensorProto.FLOAT, [1, 3, 640, 640]
+    )
+    graph_output = helper.make_tensor_value_info(
+        "output0", TensorProto.FLOAT, [1, 10, 8400]
+    )
+    values = np.zeros((1, 10, 8400), dtype=np.float32)
+    values[0, 0, 0] = 200.0  # cx
+    values[0, 1, 0] = 270.0  # cy
+    values[0, 2, 0] = 240.0  # width
+    values[0, 3, 0] = 180.0  # height
+    values[0, 4, 0] = 0.9    # class 0 (crazing)
+    constant = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["output0"],
+        value=helper.make_tensor(
+            "output0_value",
+            TensorProto.FLOAT,
+            [1, 10, 8400],
+            values.tobytes(),
+            raw=True,
+        ),
+    )
+    graph = helper.make_graph(
+        [constant], "fixed_detection", [graph_input], [graph_output]
+    )
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_opsetid("", 12)],
+        producer_name="edge-ai-test-fixture",
+    )
+    model.ir_version = 7
+    names_entry = model.metadata_props.add()
+    names_entry.key = "names"
+    names_entry.value = (
+        "{0: 'crazing', 1: 'inclusion', 2: 'patches', "
+        "3: 'pitted_surface', 4: 'rolled-in_scale', 5: 'scratches'}"
+    )
+    onnx.checker.check_model(model)
+    onnx.save(model, path)
+
+
 def main() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
     make_image()
@@ -113,6 +164,7 @@ def main() -> None:
         FIXTURES / "wrong_output.onnx", [1, 3, 640, 640], [1, 10, 100]
     )
     make_zero_output_model(FIXTURES / "zero_output.onnx")
+    make_fixed_detection_model(FIXTURES / "fixed_detection.onnx")
     (FIXTURES / "corrupt_model.bin").write_bytes(b"NOT_AN_ONNX_MODEL\n")
     for path in sorted(FIXTURES.iterdir()):
         print(f"{path.name}: {path.stat().st_size} bytes")

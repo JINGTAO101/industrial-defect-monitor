@@ -10,6 +10,7 @@ pretrained model weights.
 | `wrong_input.onnx` | Loadable ONNX model with input `[1,3,320,320]`; must be rejected by contract validation. |
 | `wrong_output.onnx` | Loadable ONNX model with correct input `[1,3,640,640]` but output `[1,10,100]`; must be rejected by output contract validation. |
 | `zero_output.onnx` | Valid-contract synthetic model whose output is all zeros; used to verify empty detections end to end. |
+| `fixed_detection.onnx` | Valid-contract synthetic model with one crazing detection at confidence 0.9; used for NG storage/display tests without a trained model. |
 | `corrupt_model.bin` | Intentionally invalid bytes; used to test model-loading diagnostics. |
 
 Regenerate with:

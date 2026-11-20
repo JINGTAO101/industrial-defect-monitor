@@ -28,6 +28,7 @@
 #include "annotation.hpp"
 #include "batch_processor.hpp"
 #include "camera_source.hpp"
+#include "detection_store.hpp"
 #include "image_source.hpp"
 #include "preview_window.hpp"
 #include "model_runner.hpp"
@@ -136,8 +137,21 @@ struct Options {
     bool display = false;
     float conf_threshold = 0.25f;
     float iou_threshold = 0.45f;
+    bool conf_set = false;
+    bool iou_set = false;
     std::size_t queue_capacity = 4;
     bool queue_capacity_set = false;
+
+    std::string db_path;
+    bool query_mode = false;
+    std::string product_id;
+    bool has_from = false;
+    std::int64_t from_ms = 0;
+    bool has_to = false;
+    std::int64_t to_ms = 0;
+    bool status_filter_set = false;
+    edge_ai::EventQuery::StatusFilter status_filter =
+        edge_ai::EventQuery::StatusFilter::Any;
 
     std::string camera_path;
     bool capture_only = false;
@@ -188,6 +202,14 @@ void printUsage(std::ostream& os)
        << "  --camera-timeout-ms <n> Read timeout in ms (default 2000)\n"
        << "  --camera-reconnect-attempts <n> Reopen attempts after device loss (default 3)\n"
        << "  --camera-reconnect-interval-ms <n> Delay between attempts (default 1000)\n"
+       << "\n"
+       << "SQLite event storage (single-image write or query):\n"
+       << "  --db <path>          Save single-image events to this SQLite database\n"
+       << "  --product-id <id>    Product identifier stored with the event / query filter\n"
+       << "  --query              Query mode; requires --db and no detection inputs\n"
+       << "  --from <time>        Query lower bound: epoch ms or YYYY-MM-DDTHH:MM:SSZ\n"
+       << "  --to <time>          Query upper bound: epoch ms or YYYY-MM-DDTHH:MM:SSZ\n"
+       << "  --status <OK|NG>     Query status filter\n"
        << "\n"
        << "Supported image extensions: jpg, jpeg, png, bmp, tif, tiff.\n"
        << "Batch processing continues after corrupt images, reports per-file errors,\n"
@@ -386,6 +408,9 @@ bool validateOutputPaths(
     if (!options.save_annotated.empty()) {
         outputs.push_back(options.save_annotated);
     }
+    if (!options.db_path.empty()) {
+        outputs.push_back(options.db_path);
+    }
 
     for (std::size_t i = 0; i < outputs.size(); ++i) {
         for (std::size_t j = i + 1; j < outputs.size(); ++j) {
@@ -509,6 +534,7 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
                                   options.conf_threshold, error)) {
                 return false;
             }
+            options.conf_set = true;
         } else if (option == "--iou") {
             std::string value;
             if (!take_value("--iou", value) ||
@@ -516,6 +542,66 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
                                   options.iou_threshold, error)) {
                 return false;
             }
+            options.iou_set = true;
+        } else if (option == "--db") {
+            if (!take_value("--db", options.db_path)) {
+                return false;
+            }
+        } else if (option == "--query") {
+            if (has_inline_value) {
+                error = "--query does not take a value";
+                return false;
+            }
+            options.query_mode = true;
+        } else if (option == "--product-id") {
+            if (!take_value("--product-id", options.product_id)) {
+                return false;
+            }
+        } else if (option == "--from") {
+            std::string value;
+            if (!take_value("--from", value)) {
+                return false;
+            }
+            std::string parse_error;
+            if (!edge_ai::parseTimestampToEpochMillis(
+                    value, options.from_ms, parse_error)) {
+                error = "invalid value for --from: " + parse_error;
+                return false;
+            }
+            options.has_from = true;
+        } else if (option == "--to") {
+            std::string value;
+            if (!take_value("--to", value)) {
+                return false;
+            }
+            std::string parse_error;
+            if (!edge_ai::parseTimestampToEpochMillis(
+                    value, options.to_ms, parse_error)) {
+                error = "invalid value for --to: " + parse_error;
+                return false;
+            }
+            options.has_to = true;
+        } else if (option == "--status") {
+            std::string value;
+            if (!take_value("--status", value)) {
+                return false;
+            }
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::toupper(c));
+                           });
+            if (value == "OK") {
+                options.status_filter =
+                    edge_ai::EventQuery::StatusFilter::Ok;
+            } else if (value == "NG") {
+                options.status_filter =
+                    edge_ai::EventQuery::StatusFilter::Ng;
+            } else {
+                error = "invalid value for --status: '" + value +
+                        "' (expected OK or NG)";
+                return false;
+            }
+            options.status_filter_set = true;
         } else if (option == "--queue-capacity") {
             std::string value;
             if (!take_value("--queue-capacity", value) ||
@@ -619,6 +705,43 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
     }
 
     const bool has_camera = !options.camera_path.empty();
+
+    if (options.query_mode) {
+        if (options.db_path.empty()) {
+            error = "--query requires --db";
+            return false;
+        }
+        if (!options.model_path.empty() || !options.image_path.empty() ||
+            !options.image_dir.empty() || has_camera ||
+            options.capture_only || !options.json_out.empty() ||
+            !options.dump_input.empty() || !options.save_annotated.empty() ||
+            options.display || options.queue_capacity_set ||
+            options.reconnect_options_set || options.camera_options_set ||
+            options.conf_set || options.iou_set) {
+            error = "--query cannot be combined with detection inputs/options";
+            return false;
+        }
+        return true;
+    }
+
+    if (options.has_from || options.has_to || options.status_filter_set) {
+        error = "--from/--to/--status are only supported with --query";
+        return false;
+    }
+    if (!options.db_path.empty()) {
+        const bool single_image_write =
+            !options.image_path.empty() && options.image_dir.empty() &&
+            !has_camera && !options.capture_only;
+        if (!single_image_write) {
+            error = "--db is only supported with single-image --image";
+            return false;
+        }
+    }
+    if (!options.product_id.empty() && options.db_path.empty()) {
+        error = "--product-id requires --db or --query";
+        return false;
+    }
+
     if (options.capture_only) {
         if (!has_camera) {
             error = "--capture-only requires --camera";
@@ -1267,6 +1390,44 @@ int runSingleImage(const Options& options)
         return 1;
     }
 
+    if (!options.db_path.empty()) {
+        edge_ai::DetectionStore store;
+        std::string db_error;
+        if (!store.open(options.db_path, true, db_error)) {
+            std::cerr << kProgram << ": event database open failed: "
+                      << db_error << "\n";
+            return 1;
+        }
+        edge_ai::DetectionEvent event;
+        event.occurred_at_ms = edge_ai::toEpochMillis(frame.timestamp);
+        event.source = frame.source;
+        event.product_id = options.product_id;
+        event.is_ng = quality.is_ng;
+        event.model_identifier = info.sha256;
+        event.model_path = info.path;
+        event.image_path.clear();  // FR-013 will retain the image later
+        event.confidence_threshold = options.conf_threshold;
+        event.defects.reserve(quality.defects.size());
+        for (const edge_ai::Detection& detection : quality.defects) {
+            edge_ai::DefectRecord defect;
+            defect.class_id = detection.class_id;
+            defect.class_name = detection.class_name;
+            defect.confidence = detection.confidence;
+            defect.x1 = detection.x1;
+            defect.y1 = detection.y1;
+            defect.x2 = detection.x2;
+            defect.y2 = detection.y2;
+            event.defects.push_back(defect);
+        }
+        if (!store.insertEvent(event, db_error)) {
+            std::cerr << kProgram << ": event database write failed: "
+                      << db_error << "\n";
+            return 1;
+        }
+        std::cout << "event saved: uid=" << event.event_uid
+                  << " db=" << options.db_path << "\n";
+    }
+
     return 0;
 }
 
@@ -1638,6 +1799,53 @@ int runCameraInference(const Options& options)
     return 0;
 }
 
+int runQuery(const Options& options)
+{
+    std::string error;
+    edge_ai::DetectionStore store;
+    if (!store.open(options.db_path, false, error)) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    edge_ai::EventQuery query;
+    query.has_from = options.has_from;
+    query.from_ms = options.from_ms;
+    query.has_to = options.has_to;
+    query.to_ms = options.to_ms;
+    query.status = options.status_filter;
+    query.has_product_id = !options.product_id.empty();
+    query.product_id = options.product_id;
+
+    std::vector<edge_ai::DetectionEvent> events;
+    if (!store.query(query, events, error)) {
+        std::cerr << kProgram << ": " << error << "\n";
+        return 1;
+    }
+
+    std::cout << "events: total=" << events.size() << "\n";
+    for (const edge_ai::DetectionEvent& event : events) {
+        std::cout << "event uid=" << event.event_uid
+                  << " time=" << edge_ai::formatEpochMillisIso(
+                                       event.occurred_at_ms)
+                  << " source=" << event.source
+                  << " product="
+                  << (event.product_id.empty() ? "-" : event.product_id)
+                  << " status=" << (event.is_ng ? "NG" : "OK")
+                  << " defects=" << event.defect_count
+                  << " model=" << event.model_identifier << "\n";
+        for (const edge_ai::DefectRecord& defect : event.defects) {
+            std::cout << "  defect class_id=" << defect.class_id
+                      << " class=" << defect.class_name
+                      << " confidence=" << std::fixed << std::setprecision(6)
+                      << defect.confidence << std::defaultfloat
+                      << " bbox=[" << defect.x1 << ", " << defect.y1 << ", "
+                      << defect.x2 << ", " << defect.y2 << "]\n";
+        }
+    }
+    return 0;
+}
+
 int runInference(const Options& options)
 {
     std::vector<std::string> input_images;
@@ -1676,6 +1884,9 @@ int main(int argc, char* argv[])
     if (options.show_version) {
         std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
         return 0;
+    }
+    if (options.query_mode) {
+        return runQuery(options);
     }
     if (options.display) {
         std::string display_error;

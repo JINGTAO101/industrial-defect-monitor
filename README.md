@@ -19,9 +19,11 @@
   排空、坏帧/设备失联区分和有限重连；真实摄像头 AT-009 仍待实机；
 - **任务 5C**：单图和摄像头共用检测框/类别/置信度/OK-NG-ERROR 标注；支持
   单图无桌面保存、单图/摄像头窗口预览，预览缓存容量 1 且慢窗口只丢预览帧；
-  关闭窗口沿用 5B 停止排空。
+  关闭窗口沿用 5B 停止排空；
+- **任务 6A**：单图检测事件和缺陷明细写入 SQLite，主/明细同一事务；独立
+  `--query` 入口按时间、OK/NG、产品 ID 单独或组合筛选，全部参数绑定。
 
-SQLite、MQTT 不在当前阶段范围内。
+MQTT 不在当前阶段范围内。
 
 ## 已验证环境
 
@@ -38,6 +40,7 @@ SQLite、MQTT 不在当前阶段范围内。
 | GDB / Git | 15.1 / 2.43.0 |
 | OpenCV | 4.6.0（`libopencv-dev`） |
 | OpenSSL | 3.0.13（`libssl-dev`） |
+| SQLite | 3.45.1（`libsqlite3-dev`） |
 | ONNX Runtime C++ | 1.32.0 CPU（`libonnxruntime.so.1.32.0`） |
 | Python（参考推理） | 3.12.3，ONNX Runtime 1.32.0，OpenCV 4.10.0 |
 
@@ -46,7 +49,7 @@ SQLite、MQTT 不在当前阶段范围内。
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake gdb git ninja-build pkg-config \
-  libopencv-dev libssl-dev
+  libopencv-dev libssl-dev libsqlite3-dev
 ```
 
 ONNX Runtime C++ CPU 包（必需）：
@@ -137,9 +140,23 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
   --camera /dev/video0 --display --queue-capacity 1
 
+# 单图事件写库（仅显式指定 --db 时写）
+./build/bin/edge_ai \
+  --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
+  --image part.jpg --product-id PART-001 --db build/events.db
+
+# 独立查询入口：组合筛选
+./build/bin/edge_ai --query --db build/events.db \
+  --from 2026-11-20T00:00:00Z --to 2026-11-21T00:00:00Z \
+  --status NG --product-id PART-001
+
 # 非法参数：stderr 报错，退出码 2
 ./build/bin/edge_ai --bogus
 ```
+
+`--db` 只接单图模式；`--query` 是独立入口，不需要模型/图片，不能与检测
+输入组合。`--from`/`--to`/`--status` 只用于查询；`--product-id` 可用于写库
+或查询筛选。写库失败不会改变 OK/NG 判定，但退出码为 1。
 
 `--image` 与 `--image-dir` 互斥；`--dump-input` 仅支持单图。支持
 `jpg/jpeg/png/bmp/tif/tiff`。批量目录中的其他扩展名文件会被跳过并在摘要中
@@ -164,11 +181,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 70 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 74 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
-重连/停止 + 标注/预览/无桌面保存）；提供 `EDGE_AI_MODEL_PATH`、
-`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时额外运行六图对照、对照
-守卫和线程化批量对照测试，共 73 个。
+重连/停止 + 标注/预览/无桌面保存 + SQLite 存储/查询）；提供
+`EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时
+额外运行六图对照、对照守卫和线程化批量对照测试，共 77 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -252,6 +269,14 @@ ctest --test-dir build --output-on-failure
 - `cli_annotation`：无桌面保存、尺寸检查、路径冲突、headless/失效 DISPLAY/
   offscreen 守卫。
 
+任务 6A 新增存储测试：
+
+- `storage_roundtrip`：事件+明细写入、唯一 ID、字段读取、关闭后重开仍存在；
+- `storage_rollback_on_defect_failure`：明细触发器失败后主记录回滚为 0 行；
+- `storage_query_filters`：状态/产品/时间范围/组合筛选，参数绑定防注入；
+- `cli_storage`：OK/NG 各一条进程写入、新进程查询、时间/状态/产品筛选、
+  写库失败诊断与退出码、选项守卫。
+
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
 指向模型、图片或彼此（含相对路径/悬空符号链接/硬链接）时被拒绝，且原文件
@@ -270,6 +295,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── batch_processor.hpp
 │   ├── bounded_queue.hpp
 │   ├── camera_source.hpp
+│   ├── detection_store.hpp
 │   ├── image_preprocess.hpp
 │   ├── image_source.hpp
 │   ├── model_contract.hpp
@@ -282,6 +308,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 ├── src/
 │   ├── batch_processor.cpp
 │   ├── camera_source.cpp
+│   ├── detection_store.cpp
 │   ├── image_preprocess.cpp
 │   ├── image_source.cpp
 │   ├── main.cpp
@@ -311,6 +338,8 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   │   ├── annotated-non-square.png   # 左上角标签避让 NG 状态条
 │   │   ├── synthetic-right-edge.png   # 右侧缺陷合成输入
 │   │   └── annotated-right-edge.png   # 右侧标签不越出图像
+│   ├── detection-store.md             # 任务 6A SQLite 结构/事务/查询
+│   ├── detection-store-run.txt        # 6A OK/NG 写库、跨进程查询、失败日志
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -330,6 +359,8 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_camera_tests.cmake
     ├── cli_signal_tests.cmake
     ├── cli_annotation_tests.cmake
+    ├── cli_storage_tests.cmake
+    ├── detection_store_tests.cpp
     ├── compare_reference_guard_tests.cmake
     ├── queue_tests.cpp
     ├── threaded_pipeline_tests.cpp
@@ -421,7 +452,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 73/73（含 5B/5C 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 77/77（含 5B/5C/6A 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 
@@ -465,6 +496,23 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   退出码 0；本轮复验机无 `/dev/video*`，摄像头预览未重跑，断流关窗由
   `preview_closed_without_frames` 单元测试覆盖；
 - 5C 自动测试 13 个；完整套件 73/73，无外部资产 70 个。
+
+## 任务 6A：SQLite 检测事件保存与查询
+
+详细结构、事务语义和验收日志见
+[docs/detection-store.md](docs/detection-store.md)。
+
+- 仅单图模式且显式 `--db <path>` 时写库；目录批量和摄像头暂不写库；
+- `detection_events` 保存唯一 ID、时间、来源、产品 ID、OK/NG、缺陷数、
+  模型 SHA256/路径和可空图片路径；`detection_defects` 保存类别、置信度和
+  原图坐标；
+- 主记录和所有明细在同一个事务中提交；任一明细失败回滚整个事件；
+- `--query --db ...` 独立查询，支持 `--from`/`--to`/`--status`/
+  `--product-id` 单独或组合筛选，全部参数绑定；
+- 写库失败在检测结果输出后报告，退出码 1，不改变 OK/NG；
+- 合成样例 OK/NG 各一条，新查询进程验证持久化和筛选；明细触发器失败的
+  单元测试确认主记录回滚；
+- 6A 新增 4 个测试；完整套件 77/77，无外部资产 74 个。
 
 ## 验收记录（2B/3）
 

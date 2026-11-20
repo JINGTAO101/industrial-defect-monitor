@@ -1,0 +1,91 @@
+# Task 6A SQLite detection event store verification log
+# Date: 2026-11-20
+# Host: Ubuntu 24.04.5 LTS, x86_64
+# SQLite 3.45.1 (system libsqlite3-dev), OpenCV 4.6.0, ONNX Runtime 1.32.0
+
+# ---- Write one OK and one NG event, each in its own detector process ----
+
+$ rm -f build/evidence-events.db*
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png \
+    --product-id PROD-OK --db build/evidence-events.db
+...
+detections: 0
+quality: OK (confidence>0.25, qualifying=0/0)
+event saved: uid=42a5c385-356a-4933-aaf2-e8c715e83c52 db=build/evidence-events.db
+# exit code: 0
+
+$ ./build/bin/edge_ai --model tests/fixtures/fixed_detection.onnx \
+    --image tests/fixtures/non_square_320x200.png \
+    --product-id PROD-NG --db build/evidence-events.db
+...
+detections: 1
+  class_id=0 crazing conf=0.900000 bbox_xyxy=[40, 30, 160, 120]
+quality: NG (confidence>0.25, qualifying=1/1)
+event saved: uid=cc372eff-4802-4390-8ac2-db770fd2703d db=build/evidence-events.db
+# exit code: 0
+
+# ---- New query process; records persisted ----
+
+$ ./build/bin/edge_ai --query --db build/evidence-events.db
+events: total=2
+event uid=42a5c385-356a-4933-aaf2-e8c715e83c52 time=2026-11-20T03:10:27.404Z source=tests/fixtures/non_square_320x200.png product=PROD-OK status=OK defects=0 model=22722727c3da4cd2cbb5ce69260ad0efbbb1f863c06af9daa14aa5be4000c697
+event uid=cc372eff-4802-4390-8ac2-db770fd2703d time=2026-11-20T03:10:27.593Z source=tests/fixtures/non_square_320x200.png product=PROD-NG status=NG defects=1 model=7848e557da6004e50b562fa34dcd83a8a3c2309b9895547107b6e93eb0fbcb17
+  defect class_id=0 class=crazing confidence=0.900000 bbox=[40, 30, 160, 120]
+# exit code: 0
+
+# ---- Filters ----
+
+$ ./build/bin/edge_ai --query --db build/evidence-events.db --status NG
+events: total=1
+event uid=cc372eff-4802-4390-8ac2-db770fd2703d ... product=PROD-NG status=NG defects=1
+  defect class_id=0 class=crazing confidence=0.900000 bbox=[40, 30, 160, 120]
+
+$ ./build/bin/edge_ai --query --db build/evidence-events.db --product-id PROD-OK
+events: total=1
+event uid=42a5c385-356a-4933-aaf2-e8c715e83c52 ... product=PROD-OK status=OK defects=0
+
+# cli_storage also runs --from/--to around a timestamp captured between the
+# two writes, and a combined --status/--product-id/--from query.
+
+# ---- Write failure keeps the quality result and exits 1 ----
+
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png \
+    --db tests/fixtures/non_square_320x200.png/events.db
+...
+quality: OK (confidence>0.25, qualifying=0/0)
+edge_ai: event database open failed: cannot create database directory
+'tests/fixtures/non_square_320x200.png': Not a directory
+# exit code: 1
+
+$ ./build/bin/edge_ai --query --db build/does-not-exist.db
+edge_ai: cannot open database 'build/does-not-exist.db': unable to open database file
+# exit code: 1
+
+# ---- Storage unit tests ----
+
+$ ./build/bin/edge_ai_storage_tests storage_roundtrip
+[PASS] storage_roundtrip
+$ ./build/bin/edge_ai_storage_tests storage_rollback_on_defect_failure
+[PASS] storage_rollback_on_defect_failure
+$ ./build/bin/edge_ai_storage_tests storage_query_filters
+[PASS] storage_query_filters
+
+# Rollback test creates:
+#   CREATE TRIGGER fail_poison BEFORE INSERT ON detection_defects
+#   WHEN NEW.class_name = 'poison'
+#   BEGIN SELECT RAISE(ABORT, 'injected defect failure'); END;
+# After the second defect fails, SELECT from detection_events returns 0 rows.
+
+# ---- CLI storage test ----
+
+$ ctest --test-dir build -R cli_storage --output-on-failure
+1/1 Test #74: cli_storage ... Passed
+100% tests passed, 0 tests failed out of 1
+
+# ---- Full suite ----
+
+$ ctest --test-dir build --output-on-failure
+100% tests passed, 0 tests failed out of 77
+# 74 tests run without external model/images.

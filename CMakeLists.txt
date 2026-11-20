@@ -23,6 +23,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui dnn)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(SQLite3 QUIET)
+if(NOT SQLite3_FOUND)
+    message(FATAL_ERROR
+        "SQLite3 development files were not found. "
+        "On Ubuntu/Debian install: sudo apt install libsqlite3-dev")
+endif()
 
 # ONNX Runtime C++ CPU 包：解压后包含 include/ 与 lib/。
 # 用法：cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.32.0 ...
@@ -95,6 +101,23 @@ target_link_libraries(edge_ai_core PUBLIC ${OpenCV_LIBS})
 target_compile_features(edge_ai_core PUBLIC cxx_std_17)
 edge_ai_enable_warnings(edge_ai_core)
 
+# SQLite event storage. Kept separate so core inference users do not link
+# SQLite unless they use persistence.
+add_library(edge_ai_storage STATIC
+    src/detection_store.cpp
+)
+target_include_directories(edge_ai_storage
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(edge_ai_storage
+    PUBLIC
+        edge_ai_core
+        SQLite::SQLite3
+)
+target_compile_features(edge_ai_storage PUBLIC cxx_std_17)
+edge_ai_enable_warnings(edge_ai_storage)
+
 # ONNX Runtime C++ 推理封装。
 add_library(edge_ai_inference STATIC
     src/model_runner.cpp
@@ -114,7 +137,7 @@ edge_ai_enable_warnings(edge_ai_inference)
 add_executable(edge_ai
     src/main.cpp
 )
-target_link_libraries(edge_ai PRIVATE edge_ai_inference system_info)
+target_link_libraries(edge_ai PRIVATE edge_ai_inference edge_ai_storage system_info)
 target_compile_definitions(edge_ai PRIVATE EDGE_AI_VERSION="${PROJECT_VERSION}")
 edge_ai_enable_warnings(edge_ai)
 
@@ -143,6 +166,20 @@ if(BUILD_TESTING)
     target_compile_definitions(edge_ai_tests PRIVATE
         EDGE_AI_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     edge_ai_enable_warnings(edge_ai_tests)
+
+    add_executable(edge_ai_storage_tests
+        tests/detection_store_tests.cpp
+    )
+    target_link_libraries(edge_ai_storage_tests PRIVATE edge_ai_storage)
+    target_include_directories(edge_ai_storage_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    edge_ai_enable_warnings(edge_ai_storage_tests)
+    foreach(storage_test
+            storage_roundtrip
+            storage_rollback_on_defect_failure
+            storage_query_filters)
+        add_test(NAME ${storage_test} COMMAND edge_ai_storage_tests ${storage_test})
+        set_tests_properties(${storage_test} PROPERTIES TIMEOUT 10)
+    endforeach()
 
     add_executable(edge_ai_batch_tests
         tests/batch_processor_tests.cpp
@@ -324,6 +361,16 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_annotation_tests.cmake
     )
     set_tests_properties(cli_annotation PROPERTIES TIMEOUT 30)
+
+    add_test(
+        NAME cli_storage
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/cli-storage-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_storage_tests.cmake
+    )
+    set_tests_properties(cli_storage PROPERTIES TIMEOUT 30)
 
     if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)
         add_test(
