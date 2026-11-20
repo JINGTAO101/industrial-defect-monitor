@@ -1,3 +1,7 @@
+
+
+
+
 #include "preview_window.hpp"
 
 #include <exception>

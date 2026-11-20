@@ -21,7 +21,10 @@
   单图无桌面保存、单图/摄像头窗口预览，预览缓存容量 1 且慢窗口只丢预览帧；
   关闭窗口沿用 5B 停止排空；
 - **任务 6A**：单图检测事件和缺陷明细写入 SQLite，主/明细同一事务；独立
-  `--query` 入口按时间、OK/NG、产品 ID 单独或组合筛选，全部参数绑定。
+  `--query` 入口按时间、OK/NG、产品 ID 单独或组合筛选，全部参数绑定；
+- **任务 6B**：单图 `--db` 模式可留存 NG 图片，支持原图字节复制和 5C 标注
+  图；默认关闭，事件 ID 命名，图片路径写入 `image_path` 并可查询；写图失败
+  仍保留事件，入库失败清理本次新图。
 
 MQTT 不在当前阶段范围内。
 
@@ -140,10 +143,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
   --camera /dev/video0 --display --queue-capacity 1
 
-# 单图事件写库（仅显式指定 --db 时写）
+# 单图事件写库（仅显式指定 --db 时写）；可选 NG 图片留存
 ./build/bin/edge_ai \
   --model "$HOME/edge-ai-models/neu-det-yolov8n-v1.0.0/neu_det_yolov8n_best.onnx" \
-  --image part.jpg --product-id PART-001 --db build/events.db
+  --image part.jpg --product-id PART-001 --db build/events.db \
+  --ng-image-dir build/ng-images --ng-image-mode annotated
 
 # 独立查询入口：组合筛选
 ./build/bin/edge_ai --query --db build/events.db \
@@ -156,7 +160,9 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 
 `--db` 只接单图模式；`--query` 是独立入口，不需要模型/图片，不能与检测
 输入组合。`--from`/`--to`/`--status` 只用于查询；`--product-id` 可用于写库
-或查询筛选。写库失败不会改变 OK/NG 判定，但退出码为 1。
+或查询筛选。`--ng-image-dir` 需要 `--db` + 单图 `--image`，`--ng-image-mode`
+为 `original`（默认）或 `annotated`。写库失败不会改变 OK/NG 判定，但退出
+码为 1。
 
 `--image` 与 `--image-dir` 互斥；`--dump-input` 仅支持单图。支持
 `jpg/jpeg/png/bmp/tif/tiff`。批量目录中的其他扩展名文件会被跳过并在摘要中
@@ -181,11 +187,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 78 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 79 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
 重连/停止 + 标注/预览/无桌面保存 + SQLite 存储/查询）；提供
 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时
-额外运行六图对照、对照守卫和线程化批量对照测试，共 81 个。
+额外运行六图对照、对照守卫和线程化批量对照测试，共 82 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -283,6 +289,8 @@ ctest --test-dir build --output-on-failure
   写库失败诊断与退出码、sidecar 冲突（含符号链接别名）、`:memory:`、
   非法日期、导出失败仍入库；普通旧表、`sqliteNotes` 表、仅视图三种无版本
   库均退出 1、SHA256 不变、无 journal；选项守卫。
+- `cli_ng_image`：原图字节复制、标注图、默认关闭、OK 不留图、写图失败
+  仍保存 NG 事件、入库失败清理新图、选项守卫。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
@@ -347,6 +355,8 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   │   └── annotated-right-edge.png   # 右侧标签不越出图像
 │   ├── detection-store.md             # 任务 6A SQLite 结构/事务/查询
 │   ├── detection-store-run.txt        # 6A OK/NG 写库、跨进程查询、失败日志
+│   ├── ng-image-retention.md          # 任务 6B NG 图片留存规则/失败语义
+│   ├── ng-image-retention-run.txt     # 6B 原图/标注、失败与清理日志
 │   ├── reference-inference-results.json
 │   └── reference-inference-run.txt
 ├── tools/
@@ -367,6 +377,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_signal_tests.cmake
     ├── cli_annotation_tests.cmake
     ├── cli_storage_tests.cmake
+    ├── cli_ng_image_tests.cmake
     ├── detection_store_tests.cpp
     ├── compare_reference_guard_tests.cmake
     ├── queue_tests.cpp
@@ -459,7 +470,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 81/81（含 5B/5C/6A 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 82/82（含 5B/5C/6A/6B 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 
@@ -502,7 +513,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
 - 上一轮 vivid 预览 53 帧，`submitted=53 shown=47 dropped=6`，`stopped=1`
   退出码 0；本轮复验机无 `/dev/video*`，摄像头预览未重跑，断流关窗由
   `preview_closed_without_frames` 单元测试覆盖；
-- 5C 自动测试 13 个；完整套件 81/81，无外部资产 78 个。
+- 5C 自动测试 13 个；完整套件 82/82，无外部资产 79 个。
 
 ## 任务 6A：SQLite 检测事件保存与查询
 
@@ -531,7 +542,23 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   分别报告；
 - 合成样例 OK/NG 各一条，新查询进程验证持久化和筛选；明细触发器失败的
   单元测试确认主记录回滚；
-- 6A 新增 8 个测试；完整套件 81/81，无外部资产 78 个。
+- 6A 新增 8 个测试；完整套件 82/82，无外部资产 79 个。
+
+## 任务 6B：NG 图片留存
+
+详细规则、失败语义和日志见
+[docs/ng-image-retention.md](docs/ng-image-retention.md)。
+
+- 默认关闭；仅单图 `--db` 模式，`--ng-image-dir <dir>` 开启，
+  `--ng-image-mode original|annotated` 选择原图字节复制或 5C 标注图；
+- 只留存 NG；OK 不写图片、不创建目录；
+- 文件名以事件 UUID 开头，已存在时追加 `-1`/`-2`，不覆盖；
+- 图片先写出，成功后其绝对路径写入 `image_path`；`--query` 输出
+  `image=<path>`（未留存为 `image=-`），可从任意工作目录打开；
+- 图片写失败：仍保存 NG 事件、`image_path=NULL`、日志含事件 ID、退出 1；
+- 图片已写出但数据库失败：删除本次新图并记录清理结果，退出 1；
+- `cli_ng_image` 覆盖原图/标注、默认关闭、OK 不留图、写图失败仍入库、
+  入库失败清理和选项守卫。
 
 ## 验收记录（2B/3）
 

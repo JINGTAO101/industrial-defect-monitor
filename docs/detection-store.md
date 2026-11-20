@@ -125,8 +125,8 @@ CREATE TABLE detection_defects (
 
 ```text
 events: total=2
-event uid=... product=PROD-OK status=OK defects=0 model=227227...
-event uid=... product=PROD-NG status=NG defects=1 model=7848e5...
+event uid=... product=PROD-OK status=OK defects=0 image=- model=227227...
+event uid=... product=PROD-NG status=NG defects=1 image=- model=7848e5...
   defect class_id=0 class=crazing confidence=0.900000 bbox=[40, 30, 160, 120]
 ```
 
@@ -135,12 +135,12 @@ event uid=... product=PROD-NG status=NG defects=1 model=7848e5...
 ```text
 $ edge_ai --query --db events.db --status NG
 events: total=1
-event ... product=PROD-NG status=NG defects=1
+event ... product=PROD-NG status=NG defects=1 image=-
   defect class_id=0 class=crazing confidence=0.900000 bbox=[40, 30, 160, 120]
 
 $ edge_ai --query --db events.db --product-id PROD-OK
 events: total=1
-event ... product=PROD-OK status=OK defects=0
+event ... product=PROD-OK status=OK defects=0 image=-
 ```
 
 CLI 测试还用两个相隔 1.1 秒的写入验证 `--from`/`--to` 各只选中一条，
@@ -175,7 +175,7 @@ database directory 'tests/fixtures/non_square_320x200.png': Not a directory
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **81/81 通过**；无模型/图片/摄像头时 78 个测试通过。
+本次完整套件 **82/82 通过**；无模型/图片/摄像头时 79 个测试通过。
 
 任务 6A 新增：
 

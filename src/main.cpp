@@ -145,6 +145,9 @@ struct Options {
     std::string db_path;
     bool query_mode = false;
     std::string product_id;
+    std::string ng_image_dir;
+    std::string ng_image_mode = "original";
+    bool ng_image_mode_set = false;
     bool has_from = false;
     std::int64_t from_ms = 0;
     bool has_to = false;
@@ -210,6 +213,8 @@ void printUsage(std::ostream& os)
        << "  --from <time>        Query lower bound: epoch ms or YYYY-MM-DDTHH:MM:SSZ\n"
        << "  --to <time>          Query upper bound: epoch ms or YYYY-MM-DDTHH:MM:SSZ\n"
        << "  --status <OK|NG>     Query status filter\n"
+       << "  --ng-image-dir <dir> Save NG images here (single-image --db only)\n"
+       << "  --ng-image-mode <m>  original (byte copy) or annotated (default original)\n"
        << "\n"
        << "Supported image extensions: jpg, jpeg, png, bmp, tif, tiff.\n"
        << "Batch processing continues after corrupt images, reports per-file errors,\n"
@@ -448,6 +453,29 @@ bool validateOutputPaths(
         }
     }
 
+    if (!options.ng_image_dir.empty()) {
+        for (const std::string& output : outputs) {
+            if (pathsConflict(output, options.ng_image_dir)) {
+                error = "output path '" + output +
+                        "' conflicts with NG image directory '" +
+                        options.ng_image_dir + "'";
+                return false;
+            }
+        }
+        if (pathsConflict(options.ng_image_dir, options.model_path)) {
+            error = "NG image directory '" + options.ng_image_dir +
+                    "' conflicts with model path '" + options.model_path + "'";
+            return false;
+        }
+        for (const std::string& input : input_images) {
+            if (pathsConflict(options.ng_image_dir, input)) {
+                error = "NG image directory '" + options.ng_image_dir +
+                        "' conflicts with input image path '" + input + "'";
+                return false;
+            }
+        }
+    }
+
     // SQLite creates <db>-journal, <db>-wal and <db>-shm next to the database.
     // None of the other outputs (or the model/inputs) may target those paths;
     // otherwise SQLite can overwrite or delete them during normal operation.
@@ -639,6 +667,26 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
                 return false;
             }
             options.status_filter_set = true;
+        } else if (option == "--ng-image-dir") {
+            if (!take_value("--ng-image-dir", options.ng_image_dir)) {
+                return false;
+            }
+        } else if (option == "--ng-image-mode") {
+            std::string value;
+            if (!take_value("--ng-image-mode", value)) {
+                return false;
+            }
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            if (value != "original" && value != "annotated") {
+                error = "invalid value for --ng-image-mode: '" + value +
+                        "' (expected original or annotated)";
+                return false;
+            }
+            options.ng_image_mode = value;
+            options.ng_image_mode_set = true;
         } else if (option == "--queue-capacity") {
             std::string value;
             if (!take_value("--queue-capacity", value) ||
@@ -762,7 +810,8 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
             !options.dump_input.empty() || !options.save_annotated.empty() ||
             options.display || options.queue_capacity_set ||
             options.reconnect_options_set || options.camera_options_set ||
-            options.conf_set || options.iou_set) {
+            options.conf_set || options.iou_set ||
+            !options.ng_image_dir.empty() || options.ng_image_mode_set) {
             error = "--query cannot be combined with detection inputs/options";
             return false;
         }
@@ -785,6 +834,22 @@ bool parseOptions(int argc, char* argv[], Options& options, std::string& error)
     if (!options.product_id.empty() && options.db_path.empty()) {
         error = "--product-id requires --db or --query";
         return false;
+    }
+    if (options.ng_image_mode_set && options.ng_image_dir.empty()) {
+        error = "--ng-image-mode requires --ng-image-dir";
+        return false;
+    }
+    if (!options.ng_image_dir.empty()) {
+        if (options.db_path.empty()) {
+            error = "--ng-image-dir requires --db";
+            return false;
+        }
+        if (options.image_path.empty() || !options.image_dir.empty() ||
+            has_camera || options.capture_only) {
+            error = "--ng-image-dir is only supported with single-image "
+                    "--image and --db";
+            return false;
+        }
     }
 
     if (options.capture_only) {
@@ -1299,6 +1364,96 @@ bool produceAnnotatedSingle(
     return true;
 }
 
+bool saveNgImage(const Options& options,
+                 const cv::Mat& image,
+                 const edge_ai::AnnotationInput& annotation,
+                 const std::string& source,
+                 const std::string& event_uid,
+                 std::string& saved_path,
+                 std::string& error)
+{
+    std::error_code fs_error;
+    std::filesystem::create_directories(options.ng_image_dir, fs_error);
+    if (fs_error) {
+        error = "cannot create NG image directory '" + options.ng_image_dir +
+                "': " + fs_error.message();
+        return false;
+    }
+
+    std::string suffix;
+    if (options.ng_image_mode == "annotated") {
+        suffix = ".png";
+    } else {
+        suffix = std::filesystem::path(source).extension().string();
+        if (suffix.empty()) {
+            suffix = ".img";
+        }
+    }
+
+    std::string candidate;
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+        const std::string stem =
+            attempt == 0 ? event_uid
+                         : event_uid + "-" + std::to_string(attempt);
+        const std::filesystem::path path =
+            std::filesystem::path(options.ng_image_dir) / (stem + suffix);
+        std::error_code exists_error;
+        const bool exists = std::filesystem::exists(path, exists_error);
+        if (exists_error) {
+            error = "cannot inspect NG image path '" + path.string() +
+                    "': " + exists_error.message();
+            return false;
+        }
+        if (!exists) {
+            candidate = path.string();
+            break;
+        }
+    }
+    if (candidate.empty()) {
+        error = "cannot find an unused NG image name for event '" +
+                event_uid + "' in '" + options.ng_image_dir + "'";
+        return false;
+    }
+
+    if (options.ng_image_mode == "annotated") {
+        const cv::Mat annotated = edge_ai::annotateFrame(image, annotation);
+        if (!edge_ai::writeAnnotatedImage(annotated, candidate, error)) {
+            return false;
+        }
+    } else {
+        std::error_code copy_error;
+        std::filesystem::copy_file(source, candidate,
+                                   std::filesystem::copy_options::none,
+                                   copy_error);
+        if (copy_error) {
+            error = "byte copy of input image '" + source + "' to '" +
+                    candidate + "' failed: " + copy_error.message();
+            return false;
+        }
+    }
+    saved_path = candidate;
+    return true;
+}
+
+void removeRetainedImage(const std::string& path)
+{
+    if (path.empty()) {
+        return;
+    }
+    std::error_code remove_error;
+    if (!std::filesystem::remove(path, remove_error)) {
+        std::cerr << kProgram << ": failed to remove retained image '" << path
+                  << "' after database failure: "
+                  << (remove_error ? remove_error.message()
+                                   : "file still exists")
+                  << "\n";
+    } else {
+        std::cerr << kProgram
+                  << ": removed retained image '" << path
+                  << "' after database failure\n";
+    }
+}
+
 int runSingleImage(const Options& options)
 {
     std::string error;
@@ -1439,7 +1594,7 @@ int runSingleImage(const Options& options)
         event.is_ng = quality.is_ng;
         event.model_identifier = info.sha256;
         event.model_path = info.path;
-        event.image_path.clear();  // FR-013 will retain the image later
+        event.image_path.clear();
         event.confidence_threshold = options.conf_threshold;
         event.event_uid = edge_ai::generateEventUid();
         event.defects.reserve(quality.defects.size());
@@ -1454,20 +1609,41 @@ int runSingleImage(const Options& options)
             defect.y2 = detection.y2;
             event.defects.push_back(defect);
         }
+
+        std::string retained_image;
+        if (!options.ng_image_dir.empty() && quality.is_ng) {
+            std::string image_error;
+            if (!saveNgImage(options, frame.image, annotation, frame.source,
+                             event.event_uid, retained_image, image_error)) {
+                std::cerr << kProgram << ": NG image save failed for event "
+                          << "uid '" << event.event_uid << "': "
+                          << image_error << "\n";
+                output_failed = true;
+            } else {
+                event.image_path = retained_image;
+            }
+        }
+
         if (!store.open(options.db_path, true, db_error)) {
             std::cerr << kProgram << ": event database open failed for event "
                       << "uid '" << event.event_uid << "': " << db_error
                       << "\n";
+            removeRetainedImage(retained_image);
             output_failed = true;
         } else if (!store.insertEvent(event, db_error)) {
             // SRS FR-012/§10: the failure log identifies the event.
             std::cerr << kProgram << ": event database write failed "
                       << "for event uid '" << event.event_uid
                       << "': " << db_error << "\n";
+            removeRetainedImage(retained_image);
             output_failed = true;
         } else {
             std::cout << "event saved: uid=" << event.event_uid
-                      << " db=" << options.db_path << "\n";
+                      << " db=" << options.db_path;
+            if (!event.image_path.empty()) {
+                std::cout << " image=" << event.image_path;
+            }
+            std::cout << "\n";
         }
     }
 
@@ -1890,6 +2066,8 @@ int runQuery(const Options& options)
                   << (event.product_id.empty() ? "-" : event.product_id)
                   << " status=" << (event.is_ng ? "NG" : "OK")
                   << " defects=" << event.defect_count
+                  << " image="
+                  << (event.image_path.empty() ? "-" : event.image_path)
                   << " model=" << event.model_identifier << "\n";
         for (const edge_ai::DefectRecord& defect : event.defects) {
             std::cout << "  defect class_id=" << defect.class_id
@@ -1949,6 +2127,16 @@ int main(int argc, char* argv[])
     // validation and the actual SQLite sidecar location identical.
     if (!options.db_path.empty()) {
         options.db_path = normalizedPath(options.db_path);
+    }
+    if (!options.ng_image_dir.empty()) {
+        options.ng_image_dir = normalizedPath(options.ng_image_dir);
+        std::error_code dir_error;
+        if (std::filesystem::exists(options.ng_image_dir, dir_error) &&
+            !std::filesystem::is_directory(options.ng_image_dir, dir_error)) {
+            std::cerr << kProgram << ": --ng-image-dir is not a directory: "
+                      << options.ng_image_dir << "\n";
+            return 2;
+        }
     }
     if (options.query_mode) {
         return runQuery(options);

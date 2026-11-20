@@ -1,0 +1,105 @@
+# Task 6B NG image retention verification log
+# Date: 2026-11-20
+# Host: Ubuntu 24.04.5 LTS, x86_64
+# Fixtures: fixed_detection.onnx (NG), zero_output.onnx (OK), 320x200 PNG
+
+$ rm -rf build/ng-evidence && mkdir -p build/ng-evidence
+$ DB=build/ng-evidence/events.db
+
+# ---- original mode ----
+
+$ ./build/bin/edge_ai --model tests/fixtures/fixed_detection.onnx \
+    --image tests/fixtures/non_square_320x200.png --product-id NG-ORIG \
+    --db "$DB" --ng-image-dir build/ng-evidence/original \
+    --ng-image-mode original
+...
+quality: NG (confidence>0.25, qualifying=1/1)
+event saved: uid=d2674773-deba-43b4-9599-57d85ec98578
+  db=/home/ljt/industrial-defect-monitor/build/ng-evidence/events.db
+  image=/home/ljt/industrial-defect-monitor/build/ng-evidence/original/d2674773-deba-43b4-9599-57d85ec98578.png
+# exit code: 0
+# saved file is 4461 bytes and SHA256-identical to the input.
+
+# ---- annotated mode ----
+
+$ ./build/bin/edge_ai --model tests/fixtures/fixed_detection.onnx \
+    --image tests/fixtures/non_square_320x200.png --product-id NG-ANN \
+    --db "$DB" --ng-image-dir build/ng-evidence/annotated \
+    --ng-image-mode annotated
+...
+quality: NG (confidence>0.25, qualifying=1/1)
+event saved: uid=add8df3b-ab60-4fc9-afb1-2c7d9397c69d
+  db=/home/ljt/industrial-defect-monitor/build/ng-evidence/events.db
+  image=/home/ljt/industrial-defect-monitor/build/ng-evidence/annotated/add8df3b-ab60-4fc9-afb1-2c7d9397c69d.png
+# exit code: 0
+# file: PNG image data, 320 x 200, 8-bit/color RGB
+
+# ---- query from a new process ----
+
+$ ./build/bin/edge_ai --query --db "$DB"
+events: total=2
+event uid=d2674773-deba-43b4-9599-57d85ec98578 time=... source=tests/fixtures/non_square_320x200.png product=NG-ORIG status=NG defects=1 image=/home/ljt/industrial-defect-monitor/build/ng-evidence/original/d2674773-deba-43b4-9599-57d85ec98578.png model=7848e5...
+  defect class_id=0 class=crazing confidence=0.900000 bbox=[40, 30, 160, 120]
+event uid=add8df3b-ab60-4fc9-afb1-2c7d9397c69d time=... product=NG-ANN status=NG defects=1 image=/home/ljt/industrial-defect-monitor/build/ng-evidence/annotated/add8df3b-ab60-4fc9-afb1-2c7d9397c69d.png model=7848e5...
+  defect class_id=0 class=crazing confidence=0.900000 bbox=[40, 30, 160, 120]
+
+# ---- default off ----
+
+$ ./build/bin/edge_ai ... --product-id NG-OFF --db "$DB"
+$ ./build/bin/edge_ai --query --db "$DB" --product-id NG-OFF
+event ... product=NG-OFF status=NG defects=1 image=- model=...
+
+# ---- OK frame with retention enabled ----
+
+$ ./build/bin/edge_ai --model tests/fixtures/zero_output.onnx \
+    --image tests/fixtures/non_square_320x200.png --product-id OK-IMG \
+    --db "$DB" --ng-image-dir build/ng-evidence/ok \
+    --ng-image-mode original
+$ find build/ng-evidence/ok -type f | wc -l
+0
+$ ./build/bin/edge_ai --query --db "$DB" --product-id OK-IMG
+event ... product=OK-IMG status=OK defects=0 image=- model=...
+
+# ---- image write failure: NG event still stored ----
+
+$ ./build/bin/edge_ai --model tests/fixtures/fixed_detection.onnx \
+    --image tests/fixtures/non_square_320x200.png \
+    --product-id NG-WRITEFAIL --db "$DB" \
+    --ng-image-dir tests/fixtures/non_square_320x200.png/ng
+edge_ai: NG image save failed for event uid
+'67ca20db-a52d-4f63-af55-0864894df5ba': cannot create NG image directory
+'.../non_square_320x200.png/ng': Not a directory
+# exit code: 1
+
+$ ./build/bin/edge_ai --query --db "$DB" --product-id NG-WRITEFAIL
+event ... product=NG-WRITEFAIL status=NG defects=1 image=- model=...
+# event is still queryable with image_path NULL.
+
+# ---- DB failure after image write: cleanup ----
+
+$ cp tests/fixtures/legacy_no_meta.db build/ng-evidence/legacy.db
+$ ./build/bin/edge_ai --model tests/fixtures/fixed_detection.onnx \
+    --image tests/fixtures/non_square_320x200.png --product-id NG-CLEAN \
+    --db build/ng-evidence/legacy.db \
+    --ng-image-dir build/ng-evidence/cleanup --ng-image-mode annotated
+edge_ai: event database open failed for event uid
+'7359b36c-e5f0-446e-aa0f-3723734d9b3b': unsupported legacy database ...
+edge_ai: removed retained image
+'/.../build/ng-evidence/cleanup/7359b36c-e5f0-446e-aa0f-3723734d9b3b.png'
+after database failure
+# exit code: 1
+
+$ find build/ng-evidence/cleanup -type f | wc -l
+0
+
+# ---- CLI test ----
+
+$ ctest --test-dir build -R cli_ng_image --output-on-failure
+1/1 Test #79: cli_ng_image ... Passed
+100% tests passed, 0 tests failed out of 1
+
+# ---- Full suite ----
+
+$ ctest --test-dir build --output-on-failure
+100% tests passed, 0 tests failed out of 82
+# 79 tests run without external model/images.

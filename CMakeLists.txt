@@ -376,6 +376,16 @@ if(BUILD_TESTING)
     )
     set_tests_properties(cli_storage PROPERTIES TIMEOUT 30)
 
+    add_test(
+        NAME cli_ng_image
+        COMMAND ${CMAKE_COMMAND}
+            -DBIN=$<TARGET_FILE:edge_ai>
+            -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+            -DTEST_DIR=${CMAKE_BINARY_DIR}/cli-ng-image-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_ng_image_tests.cmake
+    )
+    set_tests_properties(cli_ng_image PROPERTIES TIMEOUT 30)
+
     if(EDGE_AI_MODEL_PATH AND EDGE_AI_TEST_IMAGES_DIR AND EDGE_AI_PYTHON)
         add_test(
             NAME cpp_reference_comparison
