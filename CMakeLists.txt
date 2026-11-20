@@ -179,7 +179,8 @@ if(BUILD_TESTING)
             storage_query_filters
             storage_event_uid_unique
             storage_timestamp_parsing
-            storage_rejects_unknown_schema_version)
+            storage_rejects_unknown_schema_version
+            storage_rejects_legacy_database)
         add_test(NAME ${storage_test} COMMAND edge_ai_storage_tests ${storage_test})
         set_tests_properties(${storage_test} PROPERTIES TIMEOUT 10)
     endforeach()

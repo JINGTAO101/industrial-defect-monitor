@@ -137,8 +137,27 @@ $ ./build/bin/edge_ai --query --db build/export-failure.db
 events: total=1
 event ... product=EXPORT status=OK defects=0 ...
 
+# ---- Second review round: symlinked DB and legacy schema ----
+
+$ ln -s alias-target.db alias.db
+$ edge_ai --model ... --image ... --db alias.db \
+    --json-out alias-target.db-journal
+edge_ai: output path 'alias-target.db-journal' conflicts with SQLite
+sidecar file 'alias-target.db-journal'
+# exit code: 2; alias-target.db SHA256 unchanged; no journal file
+
+# Legacy database with detection_events but no schema_meta:
+$ edge_ai --model ... --image ... --db legacy-copy.db
+edge_ai: event database open failed for event uid '<id>': unsupported
+legacy database 'legacy-copy.db': existing tables but no schema_meta;
+refusing to initialize over it
+# exit code: 1; file SHA256 unchanged; no journal file
+
+$ ./build/bin/edge_ai_storage_tests storage_rejects_legacy_database
+[PASS] storage_rejects_legacy_database
+
 # ---- Full suite ----
 
 $ ctest --test-dir build --output-on-failure
-100% tests passed, 0 tests failed out of 80
-# 77 tests run without external model/images.
+100% tests passed, 0 tests failed out of 81
+# 78 tests run without external model/images.

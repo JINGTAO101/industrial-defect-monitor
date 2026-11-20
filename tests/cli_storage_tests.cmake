@@ -186,6 +186,38 @@ foreach(sidecar_suffix -journal -wal -shm)
     endif()
 endforeach()
 
+# 6b. A symlinked database must resolve to its real target before sidecar
+#     names are derived. alias.db -> events.db, so events.db-journal is the
+#     real sidecar and must conflict with --json-out.
+set(ALIAS_TARGET "${TEST_DIR}/alias-target.db")
+set(ALIAS "${TEST_DIR}/alias.db")
+file(REMOVE "${ALIAS_TARGET}" "${ALIAS_TARGET}-journal"
+    "${ALIAS_TARGET}-wal" "${ALIAS_TARGET}-shm" "${ALIAS}")
+run_edge(out err rc
+    --model "${FIXTURES}/zero_output.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --product-id "PROD-ALIAS"
+    --db "${ALIAS_TARGET}")
+expect_rc("write alias target" 0 "${rc}" "${out}" "${err}")
+file(CREATE_LINK "${ALIAS_TARGET}" "${ALIAS}" SYMBOLIC)
+file(SHA256 "${ALIAS_TARGET}" ALIAS_BEFORE)
+run_edge(out err rc
+    --model "${FIXTURES}/zero_output.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --db "${ALIAS}"
+    --json-out "${ALIAS_TARGET}-journal")
+expect_rc("symlink sidecar conflict" 2 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "SQLite sidecar")
+    message(FATAL_ERROR "symlink sidecar conflict is unclear: ${err}")
+endif()
+if(EXISTS "${ALIAS_TARGET}-journal")
+    message(FATAL_ERROR "symlink sidecar conflict created a journal file")
+endif()
+file(SHA256 "${ALIAS_TARGET}" ALIAS_AFTER)
+if(NOT ALIAS_BEFORE STREQUAL ALIAS_AFTER)
+    message(FATAL_ERROR "symlink sidecar conflict modified the database")
+endif()
+
 # 7. In-memory databases cannot satisfy the persistence contract.
 run_edge(out err rc
     --model "${FIXTURES}/zero_output.onnx"
@@ -222,6 +254,28 @@ expect_rc("query after export failure" 0 "${rc}" "${out}" "${err}")
 if(NOT out MATCHES "events: total=1" OR NOT out MATCHES "product=PROD-EXPORT")
     message(FATAL_ERROR
         "event was not persisted before the failed export: ${out}")
+endif()
+
+# 10. A legacy database with old tables but no schema_meta must be rejected
+#     without being modified.
+set(LEGACY_DB "${TEST_DIR}/legacy-copy.db")
+file(COPY_FILE "${FIXTURES}/legacy_no_meta.db" "${LEGACY_DB}"
+    ONLY_IF_DIFFERENT)
+file(SHA256 "${LEGACY_DB}" LEGACY_BEFORE)
+run_edge(out err rc
+    --model "${FIXTURES}/zero_output.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --db "${LEGACY_DB}")
+expect_rc("legacy database without schema_meta" 1 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "legacy|schema_meta")
+    message(FATAL_ERROR "legacy database error is unclear: ${err}")
+endif()
+file(SHA256 "${LEGACY_DB}" LEGACY_AFTER)
+if(NOT LEGACY_BEFORE STREQUAL LEGACY_AFTER)
+    message(FATAL_ERROR "rejected legacy database was modified")
+endif()
+if(EXISTS "${LEGACY_DB}-journal")
+    message(FATAL_ERROR "rejected legacy database left a journal file")
 endif()
 
 message(STATUS "SQLite storage CLI checks passed")

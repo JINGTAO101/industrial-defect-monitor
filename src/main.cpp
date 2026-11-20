@@ -1942,6 +1942,14 @@ int main(int argc, char* argv[])
         std::cout << kProgram << " " << EDGE_AI_VERSION << "\n";
         return 0;
     }
+    // Resolve the real database path before constructing sidecar names or
+    // opening SQLite. If --db is a symlink (alias.db -> events.db), SQLite
+    // creates events.db-journal, not alias.db-journal; validating the alias
+    // suffix would miss that sidecar. Opening the resolved path keeps the
+    // validation and the actual SQLite sidecar location identical.
+    if (!options.db_path.empty()) {
+        options.db_path = normalizedPath(options.db_path);
+    }
     if (options.query_mode) {
         return runQuery(options);
     }

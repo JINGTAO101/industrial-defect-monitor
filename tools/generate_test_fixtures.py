@@ -6,11 +6,13 @@ These files contain no third-party images or trained weights:
   - wrong_input.onnx: valid ONNX, but input shape is not [1,3,640,640]
   - wrong_output.onnx: valid ONNX, but output shape is not [1,10,8400]
   - fixed_detection.onnx: valid contract with one known crazing detection
+  - legacy_no_meta.db: old-style tables with no schema_meta version row
   - corrupt_model.bin: deliberately invalid ONNX bytes
 
 Run: python -I tools/generate_test_fixtures.py
 """
 
+import sqlite3
 from pathlib import Path
 
 import numpy as np
@@ -154,6 +156,22 @@ def make_fixed_detection_model(path: Path) -> None:
     onnx.save(model, path)
 
 
+def make_legacy_database(path: Path) -> None:
+    """Legacy-style DB with detection tables but no schema_meta version."""
+    if path.exists():
+        path.unlink()
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE detection_events ("
+        "id INTEGER PRIMARY KEY, source TEXT NOT NULL)"
+    )
+    connection.execute(
+        "INSERT INTO detection_events(source) VALUES ('legacy-row')"
+    )
+    connection.commit()
+    connection.close()
+
+
 def main() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
     make_image()
@@ -165,6 +183,7 @@ def main() -> None:
     )
     make_zero_output_model(FIXTURES / "zero_output.onnx")
     make_fixed_detection_model(FIXTURES / "fixed_detection.onnx")
+    make_legacy_database(FIXTURES / "legacy_no_meta.db")
     (FIXTURES / "corrupt_model.bin").write_bytes(b"NOT_AN_ONNX_MODEL\n")
     for path in sorted(FIXTURES.iterdir()):
         print(f"{path.name}: {path.stat().st_size} bytes")

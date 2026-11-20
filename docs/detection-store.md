@@ -21,6 +21,9 @@
 - 数据库旁会生成 SQLite 的 `-journal`/`-wal`/`-shm` 文件；这些路径也纳入
   输出冲突检查，不能被 `--json-out`/`--dump-input`/`--save-annotated`
   指向，也不能与模型或输入图片重名。
+- `--db` 先解析符号链接到真实路径，再用同一真实路径构造旁文件名并打开
+  SQLite。`alias.db -> events.db` 时检查的是 `events.db-journal`，而不是
+  `alias.db-journal`。
 
 ## 2. 数据库结构
 
@@ -56,6 +59,8 @@ CREATE TABLE detection_defects (
 - `schema_meta.schema_version` 在打开时校验。新库在一个事务里原子创建表、
   索引和版本行；已存在的库若不是版本 `1`，写入和查询都在任何 DDL/写入前
   拒绝。
+- 没有 `schema_meta` 但已经存在用户表的旧库**不会**被当作新库初始化：
+  事务内先确认 `sqlite_master` 没有用户表，否则拒绝并回滚，文件保持原样。
 - `occurred_at_ms`：输入帧成功解码时的 `system_clock` 墙钟时间（epoch ms）。
 - `source`：输入来源（单图路径）。
 - `product_id`：`--product-id`；未提供时写 NULL。
@@ -162,7 +167,7 @@ database directory 'tests/fixtures/non_square_320x200.png': Not a directory
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **80/80 通过**；无模型/图片/摄像头时 77 个测试通过。
+本次完整套件 **81/81 通过**；无模型/图片/摄像头时 78 个测试通过。
 
 任务 6A 新增：
 
@@ -174,7 +179,8 @@ ctest --test-dir build --output-on-failure
 | `storage_event_uid_unique` | 连续生成 200,000 个 ID 无重复、格式正确 |
 | `storage_timestamp_parsing` | 合法 epoch/ISO；闰年、非法日历日期、非法时区和格式被拒绝 |
 | `storage_rejects_unknown_schema_version` | 版本 999 的库在读写前被拒绝且事件数不变 |
-| `cli_storage` | OK/NG 两次进程写入、新进程查询、筛选、写库失败、sidecar 冲突、`:memory:`、非法日期、导出失败仍入库、选项守卫 |
+| `storage_rejects_legacy_database` | 有旧表但无 schema_meta 的库被拒绝，文件字节不变 |
+| `cli_storage` | OK/NG 两次进程写入、新进程查询、筛选、写库失败、sidecar 冲突（含符号链接别名）、`:memory:`、非法日期、导出失败仍入库、无版本旧库校验和不变、选项守卫 |
 
 ## 7. 限制与待确认
 

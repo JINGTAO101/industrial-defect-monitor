@@ -265,6 +265,37 @@ std::string columnText(sqlite3_stmt* stmt, int column)
     return text != nullptr ? reinterpret_cast<const char*>(text) : "";
 }
 
+// A database is initializable only when it contains no user tables. Ignore
+// SQLite's internal sqlite_* tables.
+bool databaseHasNoUserTables(sqlite3* db,
+                             bool& empty,
+                             std::string& error)
+{
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db,
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%' LIMIT 1;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        error = std::string("database emptiness probe failed: ") +
+                sqlite3_errmsg(db);
+        return false;
+    }
+    const int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        empty = false;
+    } else if (rc == SQLITE_DONE) {
+        empty = true;
+    } else {
+        error = std::string("database emptiness probe failed: ") +
+                sqlite3_errmsg(db);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+    sqlite3_finalize(stmt);
+    return true;
+}
+
 // Reads schema_meta existence and version without creating anything.
 bool schemaMetaStatus(sqlite3* db,
                       bool& exists,
@@ -457,13 +488,26 @@ bool DetectionStore::open(const std::string& path,
         bool initialized = false;
         {
             // Initialize a new database atomically: tables, indices and the
-            // schema_version row either all appear or none do.
+            // schema_version row either all appear or none do. Inside the
+            // transaction, confirm the file truly has no user tables; a
+            // legacy database with old tables but no schema_meta must be
+            // rejected without adding anything.
             Transaction transaction(db);
-            initialized =
-                transaction.begin(error) &&
-                execSql(db, kSchemaSql, error,
-                        "database schema creation failed") &&
-                transaction.commit(error);
+            if (transaction.begin(error)) {
+                bool empty = false;
+                if (!databaseHasNoUserTables(db, empty, error)) {
+                    // error already set; destructor rolls back
+                } else if (!empty) {
+                    error = "unsupported legacy database '" + path +
+                            "': existing tables but no schema_meta; refusing "
+                            "to initialize over it";
+                } else if (!execSql(db, kSchemaSql, error,
+                                    "database schema creation failed")) {
+                    // error already set; destructor rolls back
+                } else {
+                    initialized = transaction.commit(error);
+                }
+            }
             // On any failure the Transaction destructor rolls back.
         }
         if (!initialized) {

@@ -2,7 +2,9 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -433,6 +435,60 @@ bool testTimestampParsing(std::string& error)
     return true;
 }
 
+std::vector<char> readFileBytes(const std::string& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return std::vector<char>(std::istreambuf_iterator<char>(input),
+                             std::istreambuf_iterator<char>());
+}
+
+bool testLegacyDatabaseRejected(std::string& error)
+{
+    TempDb database;
+    sqlite3* db = nullptr;
+    if (sqlite3_open(database.path().c_str(), &db) != SQLITE_OK) {
+        error = "cannot create legacy database";
+        if (db != nullptr) {
+            sqlite3_close(db);
+        }
+        return false;
+    }
+    const char* legacy_sql =
+        "CREATE TABLE detection_events ("
+        "id INTEGER PRIMARY KEY, source TEXT NOT NULL);"
+        "INSERT INTO detection_events(source) VALUES ('legacy-row');";
+    char* sqlite_error = nullptr;
+    const int rc =
+        sqlite3_exec(db, legacy_sql, nullptr, nullptr, &sqlite_error);
+    sqlite3_close(db);
+    if (rc != SQLITE_OK) {
+        error = std::string("cannot build legacy database: ") +
+                (sqlite_error != nullptr ? sqlite_error : "unknown");
+        sqlite3_free(sqlite_error);
+        return false;
+    }
+
+    const std::vector<char> before = readFileBytes(database.path());
+    edge_ai::DetectionStore store;
+    std::string open_error;
+    if (!expect(!store.open(database.path(), true, open_error),
+                "legacy database without schema_meta was initialized", error) ||
+        !expect(open_error.find("legacy") != std::string::npos ||
+                    open_error.find("schema_meta") != std::string::npos,
+                "legacy database error is unclear: " + open_error, error)) {
+        return false;
+    }
+    const std::vector<char> after = readFileBytes(database.path());
+    if (!expect(before == after,
+                "rejected legacy database was modified on disk", error)) {
+        return false;
+    }
+
+    edge_ai::DetectionStore reader;
+    return expect(!reader.open(database.path(), false, open_error),
+                  "legacy database without schema_meta was readable", error);
+}
+
 bool testUnknownSchemaVersion(std::string& error)
 {
     TempDb database;
@@ -528,6 +584,7 @@ int main(int argc, char* argv[])
         {"storage_timestamp_parsing", testTimestampParsing},
         {"storage_rejects_unknown_schema_version",
          testUnknownSchemaVersion},
+        {"storage_rejects_legacy_database", testLegacyDatabaseRejected},
     };
 
     const std::string filter = argc > 1 ? argv[1] : "";

@@ -146,7 +146,7 @@ summary: total=5 ok=0 ng=4 errors=1 reconnect_count=0 stopped=0
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **80/80 通过**；无模型/图片/摄像头时 77 个测试通过。
+本次完整套件 **81/81 通过**；无模型/图片/摄像头时 78 个测试通过。
 
 ## 7. 限制与待确认
 
