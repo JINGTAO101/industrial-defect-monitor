@@ -175,7 +175,7 @@ database directory 'tests/fixtures/non_square_320x200.png': Not a directory
 ctest --test-dir build --output-on-failure
 ```
 
-本次完整套件 **82/82 通过**；无模型/图片/摄像头时 79 个测试通过。
+本次完整套件 **85/85 通过**；无模型/图片/摄像头时 82 个测试通过。
 
 任务 6A 新增：
 

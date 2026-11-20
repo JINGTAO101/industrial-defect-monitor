@@ -91,6 +91,7 @@ add_library(edge_ai_core STATIC
     src/camera_source.cpp
     src/annotation.cpp
     src/preview_window.cpp
+    src/ng_image_writer.cpp
 )
 target_include_directories(edge_ai_core
     PUBLIC
@@ -166,6 +167,20 @@ if(BUILD_TESTING)
     target_compile_definitions(edge_ai_tests PRIVATE
         EDGE_AI_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     edge_ai_enable_warnings(edge_ai_tests)
+
+    add_executable(edge_ai_ng_image_tests
+        tests/ng_image_writer_tests.cpp
+    )
+    target_link_libraries(edge_ai_ng_image_tests PRIVATE edge_ai_core)
+    target_include_directories(edge_ai_ng_image_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    edge_ai_enable_warnings(edge_ai_ng_image_tests)
+    foreach(ng_image_test
+            ng_image_original_and_annotated
+            ng_image_dangling_symlink
+            ng_image_failure_cleanup)
+        add_test(NAME ${ng_image_test} COMMAND edge_ai_ng_image_tests ${ng_image_test})
+        set_tests_properties(${ng_image_test} PROPERTIES TIMEOUT 10)
+    endforeach()
 
     add_executable(edge_ai_storage_tests
         tests/detection_store_tests.cpp

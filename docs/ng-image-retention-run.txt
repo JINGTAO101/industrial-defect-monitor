@@ -98,8 +98,49 @@ $ ctest --test-dir build -R cli_ng_image --output-on-failure
 1/1 Test #79: cli_ng_image ... Passed
 100% tests passed, 0 tests failed out of 1
 
+# ---- Review round: path conflicts, file-as-directory, atomic publish ----
+
+$ edge_ai ... --db build/ng-review/events.db \
+    --ng-image-dir build/ng-review/events.db
+edge_ai: NG image directory '.../events.db' conflicts with database
+path or sidecar '.../events.db'
+# exit code: 2; events.db is still a regular file
+
+$ edge_ai ... --db build/ng-review/events.db \
+    --ng-image-dir build/ng-review/events.db-journal
+# exit code: 2; no events.db-journal directory
+$ edge_ai ... --db build/ng-review/events.db \
+    --ng-image-dir build/ng-review/events.db/images
+# exit code: 2; the database file was not turned into a directory
+
+# Same database remains writable after all rejections:
+$ edge_ai ... --product-id AFTER --db build/ng-review/events.db
+event saved: uid=9967c436-c87d-4b99-9ee1-e3e1e327475b ...
+$ edge_ai --query --db build/ng-review/events.db --product-id AFTER
+events: total=1
+
+# Retention directory is an existing regular file: runtime image failure,
+# event still stored.
+$ printf 'not a directory\n' > build/ng-review/not-a-dir
+$ edge_ai ... --product-id FILE-DIR --db build/ng-review/events.db \
+    --ng-image-dir build/ng-review/not-a-dir
+edge_ai: NG image save failed for event uid
+'d701fa2a-988f-4a85-8cb6-8509078bdd63':
+cannot create NG image directory '.../not-a-dir': Not a directory
+# exit code: 1
+$ edge_ai --query --db ... --product-id FILE-DIR
+event ... status=NG defects=1 image=-
+
+# Atomic temp/publish regressions:
+$ ./build/bin/edge_ai_ng_image_tests ng_image_original_and_annotated
+[PASS]
+$ ./build/bin/edge_ai_ng_image_tests ng_image_dangling_symlink
+[PASS]   # pre-created dangling link is EEXIST; writer uses uid-1
+$ ./build/bin/edge_ai_ng_image_tests ng_image_failure_cleanup
+[PASS]   # size-limited write leaves no temp or truncated final file
+
 # ---- Full suite ----
 
 $ ctest --test-dir build --output-on-failure
-100% tests passed, 0 tests failed out of 82
-# 79 tests run without external model/images.
+100% tests passed, 0 tests failed out of 85
+# 82 tests run without external model/images.

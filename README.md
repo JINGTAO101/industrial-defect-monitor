@@ -187,11 +187,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ctest --test-dir build --output-on-failure
 ```
 
-不提供真实模型路径时运行 79 个测试（单元测试 + CLI 失败路径 + 空检测 +
+不提供真实模型路径时运行 82 个测试（单元测试 + CLI 失败路径 + 空检测 +
 路径冲突 + 批量输入 + 队列 + 三线程流水线 + 摄像头错误/超时/坏帧/色彩/
 重连/停止 + 标注/预览/无桌面保存 + SQLite 存储/查询）；提供
 `EDGE_AI_MODEL_PATH`、`EDGE_AI_TEST_IMAGES_DIR` 和 `EDGE_AI_PYTHON` 时
-额外运行六图对照、对照守卫和线程化批量对照测试，共 82 个。
+额外运行六图对照、对照守卫和线程化批量对照测试，共 85 个。
 
 `cli_inference_failures` 覆盖模型缺失/损坏、输入输出契约错误、缺失/不支持/
 损坏图片。单元测试覆盖非方形 letterbox、空候选、同类/跨类 NMS、坐标还原、
@@ -290,7 +290,11 @@ ctest --test-dir build --output-on-failure
   非法日期、导出失败仍入库；普通旧表、`sqliteNotes` 表、仅视图三种无版本
   库均退出 1、SHA256 不变、无 journal；选项守卫。
 - `cli_ng_image`：原图字节复制、标注图、默认关闭、OK 不留图、写图失败
-  仍保存 NG 事件、入库失败清理新图、选项守卫。
+  仍保存 NG 事件、入库失败清理新图、数据库/旁文件/子路径冲突、符号链接
+  别名、普通文件目录、选项守卫。
+- `ng_image_original_and_annotated` / `ng_image_dangling_symlink` /
+  `ng_image_failure_cleanup`：独占临时文件、完整写入后发布、悬空链接不
+  跟随、失败清理不留截断文件。
 
 `cli_empty_detections` 使用合法契约、输出全零的合成 ONNX 模型，端到端确认
 无候选时返回 `detections: 0` 且退出码为 0。`cli_path_conflicts` 检查输出路径
@@ -315,6 +319,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── image_source.hpp
 │   ├── model_contract.hpp
 │   ├── model_runner.hpp
+│   ├── ng_image_writer.hpp
 │   ├── postprocess.hpp
 │   ├── quality.hpp
 │   ├── sha256.hpp
@@ -329,6 +334,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
 │   ├── main.cpp
 │   ├── model_contract.cpp
 │   ├── model_runner.cpp
+│   ├── ng_image_writer.cpp
 │   ├── postprocess.cpp
 │   ├── quality.cpp
 │   ├── sha256.cpp
@@ -379,6 +385,7 @@ SHA256 不变。真实模型对照守卫检查六张图必须齐全、逐图 SHA
     ├── cli_storage_tests.cmake
     ├── cli_ng_image_tests.cmake
     ├── detection_store_tests.cpp
+    ├── ng_image_writer_tests.cpp
     ├── compare_reference_guard_tests.cmake
     ├── queue_tests.cpp
     ├── threaded_pipeline_tests.cpp
@@ -470,7 +477,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   未直通；vivid 日志仅用于实现验证。
 - 干净构建与回归：`docs/v4l2-verification.txt`；30 帧采集：
   `docs/v4l2-capture-run.txt`。
-- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 82/82（含 5B/5C/6A/6B 新增测试），通过。
+- 5A 自动测试 9 个，均不依赖摄像头；当前完整套件 85/85（含 5B/5C/6A/6B 新增测试），通过。
 
 ## 任务 5B：摄像头三线程检测与有限重连
 
@@ -513,7 +520,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
 - 上一轮 vivid 预览 53 帧，`submitted=53 shown=47 dropped=6`，`stopped=1`
   退出码 0；本轮复验机无 `/dev/video*`，摄像头预览未重跑，断流关窗由
   `preview_closed_without_frames` 单元测试覆盖；
-- 5C 自动测试 13 个；完整套件 82/82，无外部资产 79 个。
+- 5C 自动测试 13 个；完整套件 85/85，无外部资产 82 个。
 
 ## 任务 6A：SQLite 检测事件保存与查询
 
@@ -542,7 +549,7 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   分别报告；
 - 合成样例 OK/NG 各一条，新查询进程验证持久化和筛选；明细触发器失败的
   单元测试确认主记录回滚；
-- 6A 新增 8 个测试；完整套件 82/82，无外部资产 79 个。
+- 6A 新增 8 个测试；完整套件 85/85，无外部资产 82 个。
 
 ## 任务 6B：NG 图片留存
 
@@ -553,12 +560,19 @@ producer_wait_count=1973`，序号无丢失、无重复、无乱序。队列尚�
   `--ng-image-mode original|annotated` 选择原图字节复制或 5C 标注图；
 - 只留存 NG；OK 不写图片、不创建目录；
 - 文件名以事件 UUID 开头，已存在时追加 `-1`/`-2`，不覆盖；
+- 写图先在同目录创建独占临时文件，完整写入/fsync 后用 `link(2)` 发布；
+  已有目录项（包括悬空符号链接）不会被跟随或覆盖，失败删除临时文件；
+- 留存目录不得等于、包含或位于数据库文件或其 `-journal`/`-wal`/`-shm`
+  之下（含符号链接别名），否则返回 2 且不创建任何目录；同一数据库之后
+  仍可正常写入；
+- 留存目录是已存在的普通文件时作为运行期写图失败处理：NG 事件仍入库、
+  `image_path=NULL`、日志含事件 ID、退出 1；
 - 图片先写出，成功后其绝对路径写入 `image_path`；`--query` 输出
   `image=<path>`（未留存为 `image=-`），可从任意工作目录打开；
-- 图片写失败：仍保存 NG 事件、`image_path=NULL`、日志含事件 ID、退出 1；
 - 图片已写出但数据库失败：删除本次新图并记录清理结果，退出 1；
 - `cli_ng_image` 覆盖原图/标注、默认关闭、OK 不留图、写图失败仍入库、
-  入库失败清理和选项守卫。
+  入库失败清理、数据库/旁文件/子路径冲突、符号链接别名和选项守卫；
+  另有 `ng_image_*` 单元测试覆盖原子发布与失败清理。
 
 ## 验收记录（2B/3）
 

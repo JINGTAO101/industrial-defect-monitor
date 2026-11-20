@@ -30,6 +30,7 @@
 #include "camera_source.hpp"
 #include "detection_store.hpp"
 #include "image_source.hpp"
+#include "ng_image_writer.hpp"
 #include "preview_window.hpp"
 #include "model_runner.hpp"
 #include "postprocess.hpp"
@@ -398,6 +399,31 @@ bool pathsConflict(const std::string& first, const std::string& second)
     return normalizedPath(first) == normalizedPath(second);
 }
 
+// True when candidate == parent or candidate is lexically inside parent,
+// after resolving symlinks/relative components. Used to stop a retention
+// directory from turning the database file (or its -journal/-wal/-shm) into
+// a directory.
+bool pathIsEqualOrWithin(const std::string& candidate,
+                         const std::string& parent)
+{
+    if (candidate.empty() || parent.empty()) {
+        return false;
+    }
+    const std::filesystem::path child_path = normalizedPath(candidate);
+    const std::filesystem::path parent_path = normalizedPath(parent);
+    if (child_path == parent_path) {
+        return true;
+    }
+    auto child_it = child_path.begin();
+    auto parent_it = parent_path.begin();
+    for (; parent_it != parent_path.end(); ++parent_it, ++child_it) {
+        if (child_it == child_path.end() || *child_it != *parent_it) {
+            return false;
+        }
+    }
+    return child_it != child_path.end();
+}
+
 std::vector<std::string> sqliteSidecarPaths(const std::string& db_path)
 {
     std::vector<std::string> paths;
@@ -454,6 +480,23 @@ bool validateOutputPaths(
     }
 
     if (!options.ng_image_dir.empty()) {
+        std::vector<std::string> database_paths;
+        if (!options.db_path.empty()) {
+            database_paths.push_back(options.db_path);
+            for (const std::string& sidecar :
+                 sqliteSidecarPaths(options.db_path)) {
+                database_paths.push_back(sidecar);
+            }
+        }
+        for (const std::string& database_path : database_paths) {
+            if (pathIsEqualOrWithin(options.ng_image_dir, database_path)) {
+                error = "NG image directory '" + options.ng_image_dir +
+                        "' conflicts with database path or sidecar '" +
+                        database_path + "'";
+                return false;
+            }
+        }
+
         for (const std::string& output : outputs) {
             if (pathsConflict(output, options.ng_image_dir)) {
                 error = "output path '" + output +
@@ -1364,77 +1407,6 @@ bool produceAnnotatedSingle(
     return true;
 }
 
-bool saveNgImage(const Options& options,
-                 const cv::Mat& image,
-                 const edge_ai::AnnotationInput& annotation,
-                 const std::string& source,
-                 const std::string& event_uid,
-                 std::string& saved_path,
-                 std::string& error)
-{
-    std::error_code fs_error;
-    std::filesystem::create_directories(options.ng_image_dir, fs_error);
-    if (fs_error) {
-        error = "cannot create NG image directory '" + options.ng_image_dir +
-                "': " + fs_error.message();
-        return false;
-    }
-
-    std::string suffix;
-    if (options.ng_image_mode == "annotated") {
-        suffix = ".png";
-    } else {
-        suffix = std::filesystem::path(source).extension().string();
-        if (suffix.empty()) {
-            suffix = ".img";
-        }
-    }
-
-    std::string candidate;
-    for (int attempt = 0; attempt < 1000; ++attempt) {
-        const std::string stem =
-            attempt == 0 ? event_uid
-                         : event_uid + "-" + std::to_string(attempt);
-        const std::filesystem::path path =
-            std::filesystem::path(options.ng_image_dir) / (stem + suffix);
-        std::error_code exists_error;
-        const bool exists = std::filesystem::exists(path, exists_error);
-        if (exists_error) {
-            error = "cannot inspect NG image path '" + path.string() +
-                    "': " + exists_error.message();
-            return false;
-        }
-        if (!exists) {
-            candidate = path.string();
-            break;
-        }
-    }
-    if (candidate.empty()) {
-        error = "cannot find an unused NG image name for event '" +
-                event_uid + "' in '" + options.ng_image_dir + "'";
-        return false;
-    }
-
-    if (options.ng_image_mode == "annotated") {
-        const cv::Mat annotated = edge_ai::annotateFrame(image, annotation);
-        if (!edge_ai::writeAnnotatedImage(annotated, candidate, error)) {
-            return false;
-        }
-    } else {
-        std::error_code copy_error;
-        std::filesystem::copy_file(source, candidate,
-                                   std::filesystem::copy_options::none,
-                                   copy_error);
-        if (copy_error) {
-            error = "byte copy of input image '" + source + "' to '" +
-                    candidate + "' failed: " + copy_error.message();
-            return false;
-        }
-    }
-    saved_path = candidate;
-    return true;
-}
-
 void removeRetainedImage(const std::string& path)
 {
     if (path.empty()) {
@@ -1612,9 +1584,15 @@ int runSingleImage(const Options& options)
 
         std::string retained_image;
         if (!options.ng_image_dir.empty() && quality.is_ng) {
+            const edge_ai::NgImageMode mode =
+                options.ng_image_mode == "annotated"
+                    ? edge_ai::NgImageMode::Annotated
+                    : edge_ai::NgImageMode::Original;
             std::string image_error;
-            if (!saveNgImage(options, frame.image, annotation, frame.source,
-                             event.event_uid, retained_image, image_error)) {
+            if (!edge_ai::writeNgImage(frame.image, annotation, frame.source,
+                                       event.event_uid, mode,
+                                       options.ng_image_dir, retained_image,
+                                       image_error)) {
                 std::cerr << kProgram << ": NG image save failed for event "
                           << "uid '" << event.event_uid << "': "
                           << image_error << "\n";
@@ -2130,13 +2108,9 @@ int main(int argc, char* argv[])
     }
     if (!options.ng_image_dir.empty()) {
         options.ng_image_dir = normalizedPath(options.ng_image_dir);
-        std::error_code dir_error;
-        if (std::filesystem::exists(options.ng_image_dir, dir_error) &&
-            !std::filesystem::is_directory(options.ng_image_dir, dir_error)) {
-            std::cerr << kProgram << ": --ng-image-dir is not a directory: "
-                      << options.ng_image_dir << "\n";
-            return 2;
-        }
+        // A path that exists as a regular file is handled as a retention
+        // failure inside the event save flow, not as a pre-inference option
+        // error: the NG event must still be stored with image_path NULL.
     }
     if (options.query_mode) {
         return runQuery(options);

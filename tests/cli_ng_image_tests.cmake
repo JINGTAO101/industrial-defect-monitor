@@ -179,7 +179,96 @@ if(NOT cleanup_count EQUAL 0)
         "DB failure left ${cleanup_count} retained image(s) behind")
 endif()
 
-# 7. Option guards.
+# 7. Retention directories may not equal, contain, or live under the
+#    database or its sidecars. Rejection must happen before creating anything,
+#    and the same database must remain writable afterwards. Symbolic-link
+#    aliases are resolved before the check.
+set(CONFLICT_DB "${TEST_DIR}/conflict.db")
+file(REMOVE "${CONFLICT_DB}" "${CONFLICT_DB}-journal"
+    "${CONFLICT_DB}-wal" "${CONFLICT_DB}-shm"
+    "${TEST_DIR}/db-journal-alias")
+run_edge(out err rc
+    --model "${FIXTURES}/zero_output.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --product-id "CONFLICT-SEED" --db "${CONFLICT_DB}")
+expect_rc("conflict seed write" 0 "${rc}" "${out}" "${err}")
+
+foreach(bad_dir "${CONFLICT_DB}" "${CONFLICT_DB}-journal"
+        "${CONFLICT_DB}-wal" "${CONFLICT_DB}-shm")
+    run_edge(out err rc
+        --model "${FIXTURES}/fixed_detection.onnx"
+        --image "${FIXTURES}/non_square_320x200.png"
+        --db "${CONFLICT_DB}" --product-id "CONFLICT-BAD"
+        --ng-image-dir "${bad_dir}")
+    expect_rc("retention path ${bad_dir}" 2 "${rc}" "${out}" "${err}")
+    if(NOT err MATCHES "conflicts with database path or sidecar")
+        message(FATAL_ERROR
+            "retention path ${bad_dir} error is unclear: ${err}")
+    endif()
+    if(IS_DIRECTORY "${bad_dir}")
+        message(FATAL_ERROR
+            "retention path ${bad_dir} became a directory")
+    endif()
+endforeach()
+
+run_edge(out err rc
+    --model "${FIXTURES}/fixed_detection.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --db "${CONFLICT_DB}" --product-id "CONFLICT-UNDER"
+    --ng-image-dir "${CONFLICT_DB}/images")
+expect_rc("retention directory under database" 2 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "conflicts with database path or sidecar")
+    message(FATAL_ERROR "retention-under-db error is unclear: ${err}")
+endif()
+if(IS_DIRECTORY "${CONFLICT_DB}")
+    message(FATAL_ERROR "database path was turned into a directory")
+endif()
+
+file(CREATE_LINK "${CONFLICT_DB}-journal"
+    "${TEST_DIR}/db-journal-alias" SYMBOLIC)
+run_edge(out err rc
+    --model "${FIXTURES}/fixed_detection.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --db "${CONFLICT_DB}" --product-id "CONFLICT-ALIAS"
+    --ng-image-dir "${TEST_DIR}/db-journal-alias")
+expect_rc("retention symlink alias sidecar" 2 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "conflicts with database path or sidecar")
+    message(FATAL_ERROR "retention alias error is unclear: ${err}")
+endif()
+file(REMOVE "${TEST_DIR}/db-journal-alias")
+
+# The same database must still accept a normal write after all rejections.
+run_edge(out err rc
+    --model "${FIXTURES}/fixed_detection.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --product-id "CONFLICT-AFTER" --db "${CONFLICT_DB}")
+expect_rc("database write after retention rejection" 0 "${rc}" "${out}" "${err}")
+query_product("${CONFLICT_DB}" "CONFLICT-AFTER" event_line)
+if(NOT event_line MATCHES "status=NG" OR NOT event_line MATCHES "image=-")
+    message(FATAL_ERROR
+        "database write after rejection is wrong: ${event_line}")
+endif()
+
+# 8. A retention directory that is an existing regular file is a runtime
+#    image-save failure, not a pre-inference option error.
+set(NOT_A_DIR "${TEST_DIR}/ng-not-a-dir")
+file(WRITE "${NOT_A_DIR}" "not a directory\n")
+run_edge(out err rc
+    --model "${FIXTURES}/fixed_detection.onnx"
+    --image "${FIXTURES}/non_square_320x200.png"
+    --product-id "NG-FILE-DIR" --db "${DB}"
+    --ng-image-dir "${NOT_A_DIR}")
+expect_rc("retention directory is a file" 1 "${rc}" "${out}" "${err}")
+if(NOT err MATCHES "NG image save failed" OR NOT err MATCHES "event uid")
+    message(FATAL_ERROR "retention file error is unclear: ${err}")
+endif()
+query_product("${DB}" "NG-FILE-DIR" event_line)
+if(NOT event_line MATCHES "status=NG" OR NOT event_line MATCHES "image=-")
+    message(FATAL_ERROR
+        "NG event was lost when retention directory was a file: ${event_line}")
+endif()
+
+# 9. Option guards.
 run_edge(out err rc
     --model "${FIXTURES}/fixed_detection.onnx"
     --image "${FIXTURES}/non_square_320x200.png"
